@@ -7,9 +7,9 @@ typedef enum {
     DEVICE_ROLE_RECEIVER
 } DeviceRole;
 
-// Set the device role programmatically
+// Set the device role
 #ifndef DEVICE_ROLE
-#define DEVICE_ROLE DEVICE_ROLE_RECEIVER // Default to receiver if not defined
+#define DEVICE_ROLE DEVICE_ROLE_SENDER
 #endif
 
 #define SENDER_LOG_LEVEL ESP_LOG_DEBUG

@@ -2,6 +2,7 @@ build/*
 !.vscode/launch.json
 *.DS_Store
 !build/esp32firefly.elf
+sdkconfig.old
 
 # Common Makefile directories
 obj/
