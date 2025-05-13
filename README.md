@@ -5,7 +5,7 @@ This is the software for the ESP32 controllers on the firefly boards as well as 
 
 ### Prerequisites
 - ESP32 development board(s)
-- [ESP-IDF](https://github.com/espressif/esp-idf) installed and set up
+- [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/linux-macos-setup.html) installed and set up
 - Python 3.x
 
 ### Setup
