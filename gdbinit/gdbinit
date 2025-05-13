@@ -1,0 +1,2 @@
+source /home/leo/workspace/firefly-led-espnow/gdbinit/symbols
+source /home/leo/workspace/firefly-led-espnow/gdbinit/connect
