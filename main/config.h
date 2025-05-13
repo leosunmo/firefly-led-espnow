@@ -1,9 +1,16 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-// Define the device role here
-// #define DEVICE_ROLE_SENDER // Uncomment this line for sender
-#define DEVICE_ROLE_RECEIVER // Uncomment this line for receiver
+// Define the device roles as an enum
+typedef enum {
+    DEVICE_ROLE_SENDER,
+    DEVICE_ROLE_RECEIVER
+} DeviceRole;
+
+// Set the device role programmatically
+#ifndef DEVICE_ROLE
+#define DEVICE_ROLE DEVICE_ROLE_RECEIVER // Default to receiver if not defined
+#endif
 
 #define SENDER_LOG_LEVEL ESP_LOG_DEBUG
 #define RECEIVER_LOG_LEVEL ESP_LOG_DEBUG

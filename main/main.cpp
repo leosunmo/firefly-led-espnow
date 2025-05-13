@@ -47,18 +47,17 @@ extern "C" void app_main() {
         return;
     }
 
-#ifndef DEVICE_ROLE_SENDER
-#ifndef DEVICE_ROLE_RECEIVER
-    ESP_LOGE("app_main", "No device role defined. Define DEVICE_ROLE_SENDER or DEVICE_ROLE_RECEIVER.");
-    return;
-#endif
-#endif
-
-#ifdef DEVICE_ROLE_SENDER
-    // Initialize the example ESPNOW sender
-    ESPNOWSender::init();
-#elif defined(DEVICE_ROLE_RECEIVER)
-    // Initialize the example ESPNOW receiver
-    ESPNOWReceiver::init();
-#endif
+    switch (DEVICE_ROLE) {
+        case DEVICE_ROLE_SENDER:
+            // Initialize the example ESPNOW sender
+            ESPNOWSender::init();
+            break;
+        case DEVICE_ROLE_RECEIVER:
+            // Initialize the example ESPNOW receiver
+            ESPNOWReceiver::init();
+            break;
+        default:
+            ESP_LOGE("app_main", "Invalid device role defined.");
+            return;
+    }
 }
