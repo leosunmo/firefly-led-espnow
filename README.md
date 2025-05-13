@@ -11,7 +11,7 @@ This is the software for the ESP32 controllers on the firefly boards as well as 
 ### Setup
 1. Clone this repository:
    ```bash
-   git clone <repository-url>
+   git clone git@github.com:leosunmo/firefly-led-espnow.git
    cd firefly-led-espnow
    ```
 2. Export the ESP-IDF environment variables:
