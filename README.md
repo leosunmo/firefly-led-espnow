@@ -23,6 +23,22 @@ This is the software for the ESP32 controllers on the firefly boards as well as 
    python3 auto_build_flash.py [sender|receiver]
    ```
 
+### Monitoring
+To monitor the output from the ESP32 boards, use the `monitor_device.py` script. This script automatically detects the correct port based on the role (sender or receiver).
+
+#### Usage
+Run the following command:
+```bash
+python3 monitor_device.py [sender|receiver]
+```
+
+For example, to monitor the sender device:
+```bash
+python3 monitor_device.py sender
+```
+
+To exit the monitoring session, press `Ctrl-]`.
+
 ## Project Structure
 - `main/`: Contains the main application code.
 - `build/`: Build artifacts.
