@@ -39,7 +39,7 @@ enum {
 // Define a variant to hold different payload types
 using Payload = std::variant<ChangePatternPayload, ChangeBrightnessPayload, RegisterRequestPayload, RegistrationSuccessfulPayload>;
 
-enum class PayloadType {
+enum class PayloadType : uint8_t {
     RegisterPeer,
     ChangePattern,
     ChangeBrightness,

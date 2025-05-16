@@ -9,7 +9,7 @@ typedef enum {
 
 // Set the device role
 #ifndef DEVICE_ROLE
-#define DEVICE_ROLE DEVICE_ROLE_SENDER
+#define DEVICE_ROLE DEVICE_ROLE_RECEIVER
 #endif
 
 #define USE_POINT_TO_POINT true

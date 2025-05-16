@@ -155,33 +155,35 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
 
     // Cast the raw data to MessageData
     const MessageData *rawMessage = reinterpret_cast<const MessageData *>(data);
-
-    // Log the raw payload type received for debugging
-    ESP_LOGI(TAG, "Raw payload type received: %d", rawMessage->payload_type);
+      // Cast rawMessage->payload_type to PayloadType for type-safe comparison
+    PayloadType payloadType = static_cast<PayloadType>(rawMessage->payload_type);
 
     // Determine the expected payload size based on the payload type
     size_t expectedPayloadSize = 0;
-    switch (rawMessage->payload_type) {
-        case static_cast<uint8_t>(PayloadType::ChangePattern):
+    switch (payloadType) {
+        case PayloadType::ChangePattern:
             expectedPayloadSize = sizeof(ChangePatternPayload);
             break;
-        case static_cast<uint8_t>(PayloadType::ChangeBrightness):
+        case PayloadType::ChangeBrightness:
             expectedPayloadSize = sizeof(ChangeBrightnessPayload);
             break;
-        case static_cast<uint8_t>(PayloadType::RegistrationSuccessful):
+        case PayloadType::RegistrationSuccessful:
             expectedPayloadSize = sizeof(RegistrationSuccessfulPayload);
             break;
-        case static_cast<uint8_t>(PayloadType::Keepalive):
+        case PayloadType::Keepalive:
             expectedPayloadSize = 0; // Keepalive has no additional payload
             break;
         default:
-            ESP_LOGE(TAG, "Unknown payload type: %d", rawMessage->payload_type);
+            ESP_LOGE(TAG, "Unhandled payload type in switch: %d", static_cast<int>(payloadType));
             return -1;
     }
 
+    // Populate the Message with the payload type
+    message->payload_type = payloadType;
+
     // Validate the total data length
     if (data_len < sizeof(MessageData) + expectedPayloadSize) {
-        ESP_LOGE(TAG, "Data length is insufficient for payload type: %d", rawMessage->payload_type);
+        ESP_LOGE(TAG, "Data length is insufficient for payload type: %d", static_cast<int>(payloadType));
         return -1;
     }
 
@@ -208,9 +210,6 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
         ESP_LOGE(TAG, "CRC mismatch: calculated %04X, received %04X", calculatedCrc, rawMessage->crc);
         return -1;
     }
-
-    // Populate the Message
-    message->payload_type = static_cast<PayloadType>(rawMessage->payload_type);
 
     // Check for sequence number wrap-around
     std::string peerKey(reinterpret_cast<const char *>(src_addr), ESP_NOW_ETH_ALEN);
@@ -264,8 +263,16 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
             message->parsed_payload = payload;
             break;
         }
+        case PayloadType::Keepalive: {
+            if (payloadSize < sizeof(KeepalivePayload)) {
+                ESP_LOGE(TAG, "Payload size mismatch for KeepalivePayload");
+                return -1;
+            }
+            // Keepalive has no additional payload
+            break;
+        }
         default:
-            ESP_LOGE(TAG, "Unknown payload type: %d", rawMessage->payload_type);
+            ESP_LOGE(TAG, "Unknown payload type: %d", static_cast<int>(message->payload_type));
             return -1;
     }
 
