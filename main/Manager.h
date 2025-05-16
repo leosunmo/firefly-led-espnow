@@ -6,7 +6,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "esp_now.h"
-#include "ESPNOWMessages.h"
+#include "Messages.h"
 
 /* ESPNOW can work in both station and softap mode. It is configured in menuconfig. */
 #if CONFIG_ESPNOW_WIFI_MODE_STATION
@@ -20,10 +20,10 @@
 #define ESPNOW_QUEUE_SIZE 6
 #define ESPNOW_MAXDELAY 512
 
-class ESPNOWManager {
+class Manager {
 public:
-    ESPNOWManager();
-    ~ESPNOWManager();
+    Manager();
+    ~Manager();
 
     esp_err_t init();
 
@@ -34,4 +34,4 @@ private:
     void deinitESPNOW();
 };
 
-#endif // ESPNOW_MANAGER_H
+#endif // MANAGER_H

@@ -1,4 +1,4 @@
-#include "ESPNOWManager.h"
+#include "Manager.h"
 #include "esp_log.h"
 #include "esp_now.h"
 #include "esp_wifi.h"
@@ -6,17 +6,17 @@
 #include <stdexcept>
 #include <cstring>
 
-static const char *TAG = "ESPNOWManager";
+static const char *TAG = "Manager";
 
-ESPNOWManager::ESPNOWManager() {
+Manager::Manager() {
     // Constructor implementation (if needed)
 }
 
-ESPNOWManager::~ESPNOWManager() {
+Manager::~Manager() {
     // Clean up resources if necessary
 }
 
-esp_err_t ESPNOWManager::init() {
+esp_err_t Manager::init() {
     esp_err_t err;
 
     err = initNVS();
@@ -40,11 +40,11 @@ esp_err_t ESPNOWManager::init() {
     return ESP_OK;
 }
 
-void ESPNOWManager::deinitESPNOW() {
+void Manager::deinitESPNOW() {
     esp_now_deinit();
 }
 
-esp_err_t ESPNOWManager::initNVS() {
+esp_err_t Manager::initNVS() {
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -53,7 +53,7 @@ esp_err_t ESPNOWManager::initNVS() {
     return ret;
 }
 
-esp_err_t ESPNOWManager::initWiFi() {
+esp_err_t Manager::initWiFi() {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -70,7 +70,7 @@ esp_err_t ESPNOWManager::initWiFi() {
     return ESP_OK;
 }
 
-esp_err_t ESPNOWManager::initESPNOW() {
+esp_err_t Manager::initESPNOW() {
     ESP_ERROR_CHECK(esp_now_init());
 #if CONFIG_ESPNOW_ENABLE_POWER_SAVE
     ESP_ERROR_CHECK(esp_now_set_wake_window(CONFIG_ESPNOW_WAKE_WINDOW));
@@ -78,13 +78,6 @@ esp_err_t ESPNOWManager::initESPNOW() {
 #endif
 
     ESP_ERROR_CHECK(esp_now_set_pmk(reinterpret_cast<const uint8_t *>(CONFIG_ESPNOW_PMK)));
-
-    esp_now_peer_info_t peerInfo = {};
-    peerInfo.channel = CONFIG_ESPNOW_CHANNEL;
-    peerInfo.ifidx = static_cast<wifi_interface_t>(ESPNOW_WIFI_IF);
-    peerInfo.encrypt = false;
-    std::memcpy(peerInfo.peer_addr, broadcastMac, ESP_NOW_ETH_ALEN);
-    ESP_ERROR_CHECK(esp_now_add_peer(&peerInfo));
 
     return ESP_OK;
 }
