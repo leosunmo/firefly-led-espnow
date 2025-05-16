@@ -32,29 +32,29 @@ extern "C" {
 #include "esp_crc.h"
 }
 
-#include "ESPNOWManager.h"
-#include "ESPNOWSender.h"
-#include "ESPNOWReceiver.h"
+#include "Manager.h"
+#include "Sender.h"
+#include "Receiver.h"
 #include "config.h"
 
 extern "C" void app_main() {
-    ESPNOWManager manager;
+    Manager manager;
     esp_err_t err = ESP_OK;
 
     err = manager.init();
     if (err != ESP_OK) {
-        ESP_LOGE("app_main", "Failed to initialize ESPNOWManager: %s", esp_err_to_name(err));
+        ESP_LOGE("app_main", "Failed to initialize Manager: %s", esp_err_to_name(err));
         return;
     }
 
     switch (DEVICE_ROLE) {
         case DEVICE_ROLE_SENDER:
             // Initialize the example ESPNOW sender
-            ESPNOWSender::init();
+            Sender::init();
             break;
         case DEVICE_ROLE_RECEIVER:
             // Initialize the example ESPNOW receiver
-            ESPNOWReceiver::init();
+            Receiver::init();
             break;
         default:
             ESP_LOGE("app_main", "Invalid device role defined.");
