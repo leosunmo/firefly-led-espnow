@@ -9,12 +9,14 @@ typedef enum {
 
 // Set the device role
 #ifndef DEVICE_ROLE
-#define DEVICE_ROLE DEVICE_ROLE_RECEIVER
+#define DEVICE_ROLE DEVICE_ROLE_SENDER
 #endif
 
 #define USE_POINT_TO_POINT true
 
 #define SENDER_LOG_LEVEL ESP_LOG_DEBUG
 #define RECEIVER_LOG_LEVEL ESP_LOG_DEBUG
+
+#define BUTTON1_GPIO_NUM 0
 
 #endif // CONFIG_H

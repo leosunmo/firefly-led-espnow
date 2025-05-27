@@ -10,12 +10,12 @@
 #include <cstring>
 #include <cstdlib>
 #include <unordered_map>
-#include "Button.h"
 
 static const char *TAG = "Sender";
 
 static QueueHandle_t outgoingMessageQueue = nullptr;
 static std::unordered_map<std::string, uint16_t> peerSequenceNumbers; // Sequence numbers per peer
+static std::unordered_map<std::string, int> failedPeerCounts; // Track failed send attempts per peer
 
 esp_err_t Sender::init() {
     esp_log_level_set(TAG, SENDER_LOG_LEVEL);
@@ -27,37 +27,6 @@ esp_err_t Sender::init() {
         ESP_LOGE(TAG, "Failed to create outgoing message queue");
         return ESP_FAIL;
     }
-
-    // Setup button and register callbacks
-    Button::Config buttonConfig = {
-        .name = "button1",
-        .gpio_num = BUTTON1_GPIO_NUM,
-        .active_low = true, // Assuming active low for the button
-        .long_press_time_ms = CONFIG_BUTTON_LONG_PRESS_TIME_MS,
-        .short_press_time_ms = CONFIG_BUTTON_SHORT_PRESS_TIME_MS
-    };
-
-    if (!Button::init(buttonConfig)) {
-        ESP_LOGE(TAG, "Failed to initialize button");
-        return ESP_FAIL;
-    }
-    Button::registerCallback([](Button::Event event) {
-        switch (event) {
-            case Button::Event::PRESSED:
-                ESP_LOGI(TAG, "Button pressed");
-                break;
-            case Button::Event::DOUBLE_PRESSED:
-                ESP_LOGI(TAG, "Button double pressed");
-                break;
-            case Button::Event::LONG_PRESSED:
-                ESP_LOGI(TAG, "Button long pressed");
-                break;
-            case Button::Event::RELEASED:
-                ESP_LOGI(TAG, "Button released");
-                break;
-        }
-    });
-    ESP_LOGI(TAG, "Button initialized successfully");
 
     // Register send and receive callbacks
     ESP_ERROR_CHECK(esp_now_register_send_cb(Sender::sendCallback));
@@ -106,17 +75,32 @@ uint16_t Sender::getNextSequenceNumber(const uint8_t *mac_addr) {
     return peerSequenceNumbers[peerKey];
 }
 
+void Sender::handleFailedPeer(const uint8_t *mac_addr) {
+    std::string peerKey(reinterpret_cast<const char *>(mac_addr), ESP_NOW_ETH_ALEN);
+    failedPeerCounts[peerKey]++;
+
+    if (failedPeerCounts[peerKey] >= 3) { // Threshold for removing a peer
+        ESP_LOGW(TAG, "Removing peer due to repeated send failures: MAC=" MACSTR, MAC2STR(mac_addr));
+        esp_now_del_peer(mac_addr);
+        failedPeerCounts.erase(peerKey);
+    }
+}
+
 void Sender::sendCallback(const uint8_t *mac_addr, esp_now_send_status_t status) {
     if (!mac_addr) {
         ESP_LOGE(TAG, "Send callback error: null MAC address");
         return;
     }
-    ESP_LOGI(TAG, "Send callback: MAC= " MACSTR ", status=%d",
-             MAC2STR(mac_addr),
-             status);
 
-    if (status != ESP_NOW_SEND_SUCCESS) {
+    ESP_LOGI(TAG, "Send callback: MAC=" MACSTR ", status=%d", MAC2STR(mac_addr), status);
+
+    // Reset failed count on successful send
+    std::string peerKey(reinterpret_cast<const char *>(mac_addr), ESP_NOW_ETH_ALEN);
+    if (status == ESP_NOW_SEND_SUCCESS) {
+        failedPeerCounts.erase(peerKey);
+    } else {
         ESP_LOGW(TAG, "Send failed: MAC=" MACSTR, MAC2STR(mac_addr));
+        handleFailedPeer(mac_addr);
     }
 }
 
@@ -154,29 +138,27 @@ void Sender::recvCallback(const esp_now_recv_info_t *recv_info, const uint8_t *d
                     ESP_LOGI(TAG, "Added peer: MAC=" MACSTR, MAC2STR(recv_info->src_addr));
 
                     // Send a Registration Successful message back to the receiver
-                    size_t totalSize = sizeof(MessageData);
-
-                    auto *response = reinterpret_cast<MessageData *>(malloc(totalSize));
-                    if (!response) {
-                        ESP_LOGE(TAG, "Failed to allocate memory for Registration Successful message");
-                        return;
-                    }
-
-                    response->seq_num = getNextSequenceNumber(recv_info->src_addr);
-                    response->payload_type = static_cast<uint8_t>(PayloadType::RegistrationSuccessful);
-
-                    // Enqueue the response instead of sending it directly
+                    // Create an empty payload for the registration successful message
+                    uint8_t emptyPayload[1] = {0};
+                    
+                    // Use the common prepareSendParams function to properly construct the message
                     auto *responseParams = new SendParams;
-                    memcpy(responseParams->dest_mac, recv_info->src_addr, ESP_NOW_ETH_ALEN);
-                    memcpy(responseParams->raw_data, response, totalSize);
-                    responseParams->data_len = totalSize;
-
+                    // Add only the specific peer that registered
+                    responseParams->addDestination(recv_info->src_addr);
+                    
+                    // Set the payload type before preparing the message
+                    responseParams->payload_type = PayloadType::RegistrationSuccessful;
+                    
+                    // Prepare the message with sequence number and CRC calculation
+                    prepareSendParams(*responseParams, emptyPayload, 0);
+                    
+                    ESP_LOGI(TAG, "Preparing RegistrationSuccessful response");
+                    
+                    // Enqueue the response for sending
                     if (xQueueSend(outgoingMessageQueue, &responseParams, portMAX_DELAY) != pdTRUE) {
                         ESP_LOGE(TAG, "Failed to enqueue Registration Successful message");
                         delete responseParams;
                     }
-
-                    free(response);
                 } else {
                     ESP_LOGE(TAG, "Failed to add peer: MAC=" MACSTR, MAC2STR(recv_info->src_addr));
                 }
@@ -220,22 +202,83 @@ void Sender::processOutgoingMessages(void *pvParameter) {
                 continue;
             }
 
-            // Get number of peers registered
-            esp_err_t result = esp_now_send(nullptr, sendParams->raw_data, sendParams->data_len);
-            if (result == ESP_OK) {
-                ESP_LOGI(TAG, "Message sent successfully to %d receivers", peerCount.total_num);
-            } else {
-                ESP_LOGE(TAG, "Failed to send message error=%s", esp_err_to_name(result));
+            // Check if we have any prepared messages
+            if (sendParams->prepared_messages.empty()) {
+                // No prepared messages - this could happen if destinations were added after preparation
+                ESP_LOGW(TAG, "No prepared messages found. Preparing now.");
+                
+                // Check if destinations are specified
+                if (sendParams->dest_macs.empty()) {
+                    ESP_LOGW(TAG, "No destinations specified. Adding all peers.");
+                    sendParams->addAllPeers();
+                    
+                    // If still empty, no peers are registered
+                    if (sendParams->dest_macs.empty()) {
+                        ESP_LOGW(TAG, "No peers to send to. Skipping message.");
+                        delete sendParams;
+                        continue;
+                    }
+                }
+                
+                // Since we don't have raw_data anymore, and messages are already prepared
+                // or could not be prepared in the first place, we'll just log a warning and skip
+                ESP_LOGW(TAG, "Cannot re-prepare messages without original payload. Skipping message send for payload type %d.", 
+                         static_cast<int>(sendParams->payload_type));
+                delete sendParams;
+                continue;
             }
+            
+            // Get the message type for logging purposes - we already store it in the SendParams
+            PayloadType payloadType = sendParams->payload_type;
+            int sent_count = 0;
+            
+            // Send each pre-prepared message to its destination
+            for (auto& preparedMsg : sendParams->prepared_messages) {
+                // Verify the data is within ESP-NOW size limits
+                if (preparedMsg.data.size() > ESP_NOW_MAX_DATA_LEN_V2) {
+                    ESP_LOGE(TAG, "Message size %zu exceeds ESP-NOW limit of %d", 
+                             preparedMsg.data.size(), ESP_NOW_MAX_DATA_LEN_V2);
+                    continue;
+                }
+                
+                // Send the pre-prepared message to its destination
+                esp_err_t result = esp_now_send(preparedMsg.dest.address,
+                                              preparedMsg.data.data(),
+                                              preparedMsg.data.size());
+                                              
+                // Get the message info for logging
+                MessageData* peerMsg = reinterpret_cast<MessageData*>(preparedMsg.data.data());
+                
+                if (result == ESP_OK) {
+                    sent_count++;
+                    ESP_LOGD(TAG, "Sent to " MACSTR ", type=%d, seq=%u", 
+                             MAC2STR(preparedMsg.dest.address),
+                             static_cast<int>(payloadType), 
+                             peerMsg->seq_num);
+                } else {
+                    ESP_LOGW(TAG, "Failed to send to " MACSTR ": %s", 
+                             MAC2STR(preparedMsg.dest.address),
+                             esp_err_to_name(result));
+                }
+            }
+            
+            ESP_LOGI(TAG, "Sent message type %d to %d out of %zu peers", 
+                     static_cast<int>(payloadType), sent_count, sendParams->prepared_messages.size());
 
             delete sendParams;
         }
     }
 }
 
-void Sender::prepareSendParams(SendParams &sendParams, const uint8_t *payload, size_t payload_len, PayloadType payload_type) {
-    // Log payload length and buffer sizes
-    ESP_LOGD(TAG, "Payload length: %zu, raw_data size: %zu", payload_len, sizeof(sendParams.raw_data));
+void Sender::prepareSendParams(SendParams &sendParams, const uint8_t *payload, size_t payload_len) {
+    // Validate that a proper payload type has been specified
+    if (sendParams.payload_type == PayloadType::Unspecified) {
+        ESP_LOGE(TAG, "Cannot prepare messages with unspecified payload type");
+        return;
+    }
+    
+    // Log payload information
+    ESP_LOGD(TAG, "Preparing messages for payload type: %d, length: %zu", static_cast<int>(sendParams.payload_type), payload_len);
 
     // Validate payload length
     if (payload_len > ESP_NOW_MAX_DATA_LEN_V2 - sizeof(MessageData)) {
@@ -246,45 +289,59 @@ void Sender::prepareSendParams(SendParams &sendParams, const uint8_t *payload, s
     // Calculate the total size needed for MessageData and the payload
     size_t messageDataSize = sizeof(MessageData) + payload_len;
 
-    // Dynamically allocate memory for MessageData and its payload
-    MessageData *messageData = reinterpret_cast<MessageData *>(malloc(messageDataSize));
-    if (!messageData) {
-        ESP_LOGE(TAG, "Failed to allocate memory for MessageData");
-        return;
-    }
-
-    // Initialize the fixed fields of MessageData
-    messageData->seq_num = getNextSequenceNumber(sendParams.dest_mac);
-    messageData->payload_type = static_cast<uint8_t>(payload_type);
-
-    ESP_LOGI(TAG, "Preparing to send payload type: %d", messageData->payload_type);
+    // Create a template message
+    std::vector<uint8_t> messageTemplate(messageDataSize);
+    MessageData *templateMsgData = reinterpret_cast<MessageData *>(messageTemplate.data());
+    
+    // Initialize template MessageData
+    templateMsgData->seq_num = 0; // Will be replaced for each peer
+    templateMsgData->crc = 0;     // Will be calculated for each peer
+    templateMsgData->payload_type = static_cast<uint8_t>(sendParams.payload_type);
+    
+    ESP_LOGI(TAG, "Preparing message template for payload type: %d", templateMsgData->payload_type);
 
     // Copy the payload into the flexible array member
-    memcpy(messageData->payload, payload, payload_len);
-
-    // Set the CRC field to 0 before calculating the CRC
-    messageData->crc = 0;
-
-    // Calculate CRC over the entire copied structure
-    uint16_t calculatedCrc = esp_crc16_le(UINT16_MAX, reinterpret_cast<const uint8_t *>(messageData), messageDataSize);
-
-    messageData->crc = calculatedCrc;
-
-    ESP_LOGI(TAG, "Calculated CRC: %04X", messageData->crc);
-
-    // Ensure raw_data buffer is large enough to hold the entire messageData
-    if (messageDataSize > sizeof(sendParams.raw_data)) {
-        ESP_LOGE(TAG, "raw_data buffer size is insufficient");
-        free(messageData);
-        return;
+    if (payload_len > 0 && payload != nullptr) {
+        memcpy(templateMsgData->payload, payload, payload_len);
     }
+    
+    // Clear any existing prepared messages
+    sendParams.prepared_messages.clear();
+    
+    // Process each destination and prepare a message with sequence number and CRC
+    for (const auto& dest : sendParams.dest_macs) {
+        // Create a new message buffer for this destination
+        std::vector<uint8_t> messageBuffer(messageTemplate);
+        
+        // Get a pointer to the message data for easier manipulation
+        MessageData* peerMsg = reinterpret_cast<MessageData*>(messageBuffer.data());
+        
+        // Set the sequence number for this specific peer
+        peerMsg->seq_num = getNextSequenceNumber(dest.address);
+        
+        // Calculate and set CRC
+        peerMsg->crc = 0; // Reset CRC to 0 before calculation
+        uint16_t calculatedCrc = esp_crc16_le(UINT16_MAX, 
+                                             messageBuffer.data(), 
+                                             messageDataSize);
+        peerMsg->crc = calculatedCrc;
+        
+        // Log for registration successful messages before we move the buffer
+        if (sendParams.payload_type == PayloadType::RegistrationSuccessful) {
+            ESP_LOGI(TAG, "Prepared RegistrationSuccessful for " MACSTR " with seq=%u, CRC=%04X", 
+                     MAC2STR(dest.address), peerMsg->seq_num, calculatedCrc);
+        }
+        
+        // Create the prepared message with the destination and data
+        PreparedMessage preparedMsg(dest, std::move(messageBuffer));
+        
+        // After this point, don't use peerMsg or messageBuffer as they've been moved
 
-    // Copy the entire messageData (including the payload) into raw_data
-    memcpy(sendParams.raw_data, messageData, messageDataSize);
-    sendParams.data_len = messageDataSize;
-
-    // Free the allocated memory for messageData
-    free(messageData);
+        // Add the prepared message to the vector
+        sendParams.prepared_messages.push_back(std::move(preparedMsg));
+    }
+    
+    ESP_LOGI(TAG, "Prepared %zu messages for sending", sendParams.prepared_messages.size());
 }
 
 void Sender::sendLoop(void *pvParameter) {
@@ -306,7 +363,14 @@ void Sender::sendLoop(void *pvParameter) {
         esp_fill_random(payload, sizeof(payload));
 
         auto *sendParams = new SendParams;
-        prepareSendParams(*sendParams, payload, sizeof(payload), PayloadType::ChangePattern);
+        // Add all registered peers as destinations
+        sendParams->addAllPeers();
+        
+        // Set the payload type
+        sendParams->payload_type = PayloadType::ChangePattern;
+        
+        // This will prepare messages with proper sequence numbers and CRCs for all destinations
+        prepareSendParams(*sendParams, payload, sizeof(payload));
 
         if (xQueueSend(outgoingMessageQueue, &sendParams, portMAX_DELAY) != pdTRUE) {
             ESP_LOGE(TAG, "Failed to enqueue message");
@@ -336,7 +400,14 @@ void Sender::sendKeepalive(void *pvParameter) {
         uint8_t keepalivePayload[1] = {0}; // Minimal payload for keepalive
 
         auto *sendParams = new SendParams;
-        prepareSendParams(*sendParams, keepalivePayload, sizeof(keepalivePayload), PayloadType::Keepalive);
+        // Add all registered peers as destinations
+        sendParams->addAllPeers();
+        
+        // Set the payload type
+        sendParams->payload_type = PayloadType::Keepalive;
+        
+        // Prepare messages with sequence numbers and CRCs for all destinations
+        prepareSendParams(*sendParams, keepalivePayload, sizeof(keepalivePayload));
 
         if (xQueueSend(outgoingMessageQueue, &sendParams, portMAX_DELAY) != pdTRUE) {
             ESP_LOGE(TAG, "Failed to enqueue keepalive message");
