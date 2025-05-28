@@ -17,6 +17,6 @@ typedef enum {
 #define SENDER_LOG_LEVEL ESP_LOG_DEBUG
 #define RECEIVER_LOG_LEVEL ESP_LOG_DEBUG
 
-#define BUTTON1_GPIO_NUM 0
+#define BUTTON1_GPIO_NUM 16
 
 #endif // CONFIG_H
