@@ -3,17 +3,39 @@
 
 #include <cstdint>
 #include <unordered_map>
+#include <memory>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "esp_now.h"
 #include "Messages.h"
 #include "Manager.h"
+#include "Button.h"
 
 class Sender {
 public:
-    static esp_err_t init();
+    // Delete copy constructor and assignment operator
+    Sender(const Sender&) = delete;
+    Sender& operator=(const Sender&) = delete;
+    
+    // Static method to get the singleton instance
+    static Sender& getInstance();
+    
+    // Initialize the sender
+    esp_err_t init();
 
 private:
+    // Private constructor and destructor for singleton
+    Sender();
+    ~Sender();
+    
+    // Button event handlers
+    void handleButtonEvent(const std::string& buttonName, Button::Event event);
+    
+    // Button instances
+    std::unique_ptr<Button> blueButton;
+    std::unique_ptr<Button> redButton;
+    
+    // Static methods for ESP-NOW
     static void sendLoop(void *pvParameter);
     static void sendCallback(const uint8_t *mac_addr, esp_now_send_status_t status);
     static void recvCallback(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);

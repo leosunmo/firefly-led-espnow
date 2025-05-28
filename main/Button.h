@@ -41,23 +41,33 @@ public:
     using Callback = std::function<void(Event event)>;
 
     /**
-     * @brief Initialize a new button
+     * @brief Constructor
      * @param config Button configuration
+     */
+    Button(const Config& config);
+
+    /**
+     * @brief Destructor to clean up resources
+     */
+    ~Button();
+
+    /**
+     * @brief Initialize the button
      * @return true if initialization was successful
      */
-    static bool init(const Config& config);
+    bool init();
 
     /**
      * @brief Register callback for button events
      * @param callback Function to call when button events occur
      */
-    static void registerCallback(Callback callback);
+    void registerCallback(Callback callback);
 
     /**
      * @brief Check if the button is currently pressed
      * @return true if button is pressed
      */
-    static bool isPressed();
+    bool isPressed();
 
 private:
     // Button event handler callbacks
@@ -66,15 +76,21 @@ private:
     static void handleLongPressStart(void* arg, void* user_data);
     static void handleButtonRelease(void* arg, void* user_data);
 
+    // Instance methods that handle events for this button
+    void onSingleClick();
+    void onDoubleClick();
+    void onLongPressStart();
+    void onButtonRelease();
+
     // Button handle
-    static button_handle_t button_handle_;
+    button_handle_t button_handle_;
     
     // User callback
-    static Callback callback_;
+    Callback callback_;
 
-    // Button name for identification
-    static std::string button_name_;
+    // Button name and configuration
+    Config config_;
     
     // Logger tag
-    static const char* TAG;
+    char tag_[32];
 };

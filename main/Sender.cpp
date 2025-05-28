@@ -17,6 +17,75 @@ static const char *TAG = "Sender";
 static QueueHandle_t outgoingMessageQueue = nullptr;
 static std::unordered_map<std::string, uint16_t> peerSequenceNumbers; // Sequence numbers per peer
 
+// Singleton instance implementation
+Sender& Sender::getInstance() {
+    static Sender instance; // Created only once on first access
+    return instance;
+}
+
+// Constructor and destructor implementation
+Sender::Sender() : blueButton(nullptr), redButton(nullptr) {
+    // Constructor implementation
+    ESP_LOGI(TAG, "Sender singleton instance created");
+}
+
+Sender::~Sender() {
+    // Destructor implementation - Button objects will be automatically deleted by unique_ptr
+    ESP_LOGW(TAG, "Sender singleton instance destroyed");
+}
+
+// Button event handler implementation as class member
+void Sender::handleButtonEvent(const std::string& buttonName, Button::Event event) {
+    // Descriptive strings for each event type
+    const char* eventNames[] = {
+        "PRESSED",
+        "DOUBLE_PRESSED", 
+        "LONG_PRESSED", 
+        "RELEASED"
+    };
+    
+    // Log the button event with detailed information
+    ESP_LOGI(TAG, "Button Event: %s - %s", 
+             buttonName.c_str(), 
+             eventNames[static_cast<int>(event)]);
+    
+    // Button-specific actions
+    switch (event) {
+        case Button::Event::PRESSED:
+            if (buttonName == "BlueButton") {
+                ESP_LOGI(TAG, "Blue button action: Sending blue pattern command");
+                // Example: Create blue pattern payload
+                uint8_t bluePayload[] = {0x01, 0x00, 0xFF, 0x00}; // Example blue pattern command
+                auto* blueParams = new SendParams;
+                prepareSendParams(*blueParams, bluePayload, sizeof(bluePayload), PayloadType::ChangePattern);
+                xQueueSend(outgoingMessageQueue, &blueParams, portMAX_DELAY);
+            } 
+            else if (buttonName == "RedButton") {
+                ESP_LOGI(TAG, "Red button action: Sending red pattern command");
+                // Example: Create red pattern payload
+                uint8_t redPayload[] = {0x02, 0xFF, 0x00, 0x00}; // Example red pattern command
+                auto* redParams = new SendParams;
+                prepareSendParams(*redParams, redPayload, sizeof(redPayload), PayloadType::ChangePattern);
+                xQueueSend(outgoingMessageQueue, &redParams, portMAX_DELAY);
+            }
+            break;
+            
+        case Button::Event::DOUBLE_PRESSED:
+            // Example double press action: Toggle brightness
+            ESP_LOGI(TAG, "%s double pressed: Toggle brightness", buttonName.c_str());
+            break;
+            
+        case Button::Event::LONG_PRESSED:
+            // Example long press action: Power off/on
+            ESP_LOGI(TAG, "%s long pressed: Power toggle", buttonName.c_str());
+            break;
+            
+        case Button::Event::RELEASED:
+            // Usually no specific action needed on release
+            break;
+    }
+}
+
 esp_err_t Sender::init() {
     esp_log_level_set(TAG, SENDER_LOG_LEVEL);
     ESP_LOGI(TAG, "Initializing ESPNOW Sender");
@@ -28,36 +97,36 @@ esp_err_t Sender::init() {
         return ESP_FAIL;
     }
 
-    // Setup button and register callbacks
-    Button::Config buttonConfig = {
-        .name = "button1",
-        .gpio_num = BUTTON1_GPIO_NUM,
+    Button::Config blueButtonCfg = {
+        .name = "BlueButton",
+        .gpio_num = BUTTONBLUE_GPIO_NUM,
         .active_low = true, // Assuming active low for the button
         .long_press_time_ms = CONFIG_BUTTON_LONG_PRESS_TIME_MS,
         .short_press_time_ms = CONFIG_BUTTON_SHORT_PRESS_TIME_MS
     };
 
-    if (!Button::init(buttonConfig)) {
-        ESP_LOGE(TAG, "Failed to initialize button");
-        return ESP_FAIL;
-    }
-    Button::registerCallback([](Button::Event event) {
-        switch (event) {
-            case Button::Event::PRESSED:
-                ESP_LOGI(TAG, "Button pressed");
-                break;
-            case Button::Event::DOUBLE_PRESSED:
-                ESP_LOGI(TAG, "Button double pressed");
-                break;
-            case Button::Event::LONG_PRESSED:
-                ESP_LOGI(TAG, "Button long pressed");
-                break;
-            case Button::Event::RELEASED:
-                ESP_LOGI(TAG, "Button released");
-                break;
-        }
+    Button::Config redButtonCfg = {
+        .name = "RedButton",
+        .gpio_num = BUTTONRED_GPIO_NUM,
+        .active_low = true, // Assuming active low for the button
+        .long_press_time_ms = CONFIG_BUTTON_LONG_PRESS_TIME_MS,
+        .short_press_time_ms = CONFIG_BUTTON_SHORT_PRESS_TIME_MS
+    };
+
+    // Create button instances as class members so they persist beyond this function
+    blueButton = std::make_unique<Button>(blueButtonCfg);
+    redButton = std::make_unique<Button>(redButtonCfg);
+
+    // Create button callbacks with lambdas that capture the button name
+    blueButton->registerCallback([this](Button::Event event) {
+        this->handleButtonEvent("BlueButton", event);
     });
-    ESP_LOGI(TAG, "Button initialized successfully");
+
+    redButton->registerCallback([this](Button::Event event) {
+        this->handleButtonEvent("RedButton", event);
+    });
+
+    ESP_LOGI(TAG, "Buttons initialized successfully");
 
     // Register send and receive callbacks
     ESP_ERROR_CHECK(esp_now_register_send_cb(Sender::sendCallback));

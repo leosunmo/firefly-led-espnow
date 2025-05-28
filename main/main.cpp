@@ -49,8 +49,8 @@ extern "C" void app_main() {
 
     switch (DEVICE_ROLE) {
         case DEVICE_ROLE_SENDER:
-            // Initialize the example ESPNOW sender
-            Sender::init();
+            // Initialize the example ESPNOW sender using the singleton instance
+            Sender::getInstance().init();
             break;
         case DEVICE_ROLE_RECEIVER:
             // Initialize the example ESPNOW receiver
