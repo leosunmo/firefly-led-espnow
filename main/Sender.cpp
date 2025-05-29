@@ -11,10 +11,13 @@
 #include <cstdlib>
 #include <unordered_map>
 #include "Button.h"
+#include "Potentiometer.h"
+#include "PayloadHelper.h"
 
 static const char *TAG = "Sender";
 
-static QueueHandle_t outgoingMessageQueue = nullptr;
+// Make outgoingMessageQueue global so it can be accessed by template methods
+QueueHandle_t outgoingMessageQueue = nullptr;
 static std::unordered_map<std::string, uint16_t> peerSequenceNumbers; // Sequence numbers per peer
 
 // Singleton instance implementation
@@ -23,14 +26,63 @@ Sender& Sender::getInstance() {
     return instance;
 }
 
+// Specialized helper methods for sending common payload types
+void Sender::sendPatternChange(const std::string& patternName, const uint8_t* destMac) {
+    ChangePatternPayload payload;
+    payload.patternName = patternName;
+    sendPayload(payload, PayloadType::ChangePattern, destMac);
+    ESP_LOGI(TAG, "Sent pattern change: %s", patternName.c_str());
+}
+
+void Sender::sendBrightnessChange(uint8_t brightness, const uint8_t* destMac) {
+    ChangeBrightnessPayload payload;
+    payload.brightnessLevel = brightness;
+    sendPayload(payload, PayloadType::ChangeBrightness, destMac);
+    ESP_LOGI(TAG, "Sent brightness change: %u%%%%", brightness);
+}
+
+void Sender::sendSpeedChange(uint8_t speed, const uint8_t* destMac) {
+    ChangeSpeedPayload payload;
+    payload.speedLevel = speed;
+    sendPayload(payload, PayloadType::ChangeSpeed, destMac);
+    ESP_LOGI(TAG, "Sent speed change: %u%%%%", speed);
+}
+
+void Sender::sendKeepaliveMessage(const uint8_t* destMac) {
+    KeepalivePayload payload;
+    sendPayload(payload, PayloadType::Keepalive, destMac);
+    ESP_LOGI(TAG, "Sent keepalive message");
+}
+
+void Sender::sendRegistrationResponse(const uint8_t* destMac) {
+    if (!destMac) {
+        ESP_LOGE(TAG, "Cannot send registration response to null MAC address");
+        return;
+    }
+    
+    RegistrationSuccessfulPayload payload;
+    sendPayload(payload, PayloadType::RegistrationSuccessful, destMac);
+    ESP_LOGI(TAG, "Sent registration response to MAC=" MACSTR, MAC2STR(destMac));
+}
+
 // Constructor and destructor implementation
-Sender::Sender() : blueButton(nullptr), redButton(nullptr) {
+Sender::Sender() : blueButton(nullptr), redButton(nullptr), 
+                  brightnessPot(nullptr), speedPot(nullptr) {
     // Constructor implementation
     ESP_LOGI(TAG, "Sender singleton instance created");
 }
 
 Sender::~Sender() {
-    // Destructor implementation - Button objects will be automatically deleted by unique_ptr
+    // Stop potentiometer tasks first
+    if (brightnessPot) {
+        brightnessPot->stop();
+    }
+    
+    if (speedPot) {
+        speedPot->stop();
+    }
+    
+    // Destructor implementation - Smart pointer objects will be automatically deleted
     ESP_LOGW(TAG, "Sender singleton instance destroyed");
 }
 
@@ -54,19 +106,11 @@ void Sender::handleButtonEvent(const std::string& buttonName, Button::Event even
         case Button::Event::PRESSED:
             if (buttonName == "BlueButton") {
                 ESP_LOGI(TAG, "Blue button action: Sending blue pattern command");
-                // Example: Create blue pattern payload
-                uint8_t bluePayload[] = {0x01, 0x00, 0xFF, 0x00}; // Example blue pattern command
-                auto* blueParams = new SendParams;
-                prepareSendParams(*blueParams, bluePayload, sizeof(bluePayload), PayloadType::ChangePattern);
-                xQueueSend(outgoingMessageQueue, &blueParams, portMAX_DELAY);
+                sendPatternChange("BluePattern");
             } 
             else if (buttonName == "RedButton") {
                 ESP_LOGI(TAG, "Red button action: Sending red pattern command");
-                // Example: Create red pattern payload
-                uint8_t redPayload[] = {0x02, 0xFF, 0x00, 0x00}; // Example red pattern command
-                auto* redParams = new SendParams;
-                prepareSendParams(*redParams, redPayload, sizeof(redPayload), PayloadType::ChangePattern);
-                xQueueSend(outgoingMessageQueue, &redParams, portMAX_DELAY);
+                sendPatternChange("RedPattern");
             }
             break;
             
@@ -83,6 +127,71 @@ void Sender::handleButtonEvent(const std::string& buttonName, Button::Event even
         case Button::Event::RELEASED:
             // Usually no specific action needed on release
             break;
+    }
+}
+
+// Potentiometer event handler implementation
+void Sender::handlePotentiometerEvent(const std::string& potName, 
+                                    Potentiometer::Event event, 
+                                    uint32_t value, 
+                                    float percentage) {
+    // Descriptive strings for each event type
+    const char* eventNames[] = {
+        "VALUE_CHANGED",
+        "MIN_REACHED", 
+        "MAX_REACHED", 
+        "CENTER_REACHED"
+    };
+    
+    // Log the potentiometer event with detailed information
+    ESP_LOGI(TAG, "Potentiometer Event: %s - %s, Value: %lu (%.1f%%)", 
+             potName.c_str(), 
+             eventNames[static_cast<int>(event)],
+             value, percentage);
+             
+    // Handle specific potentiometer events
+    if (potName == "BrightnessPot") {
+        // Handle brightness potentiometer
+        switch (event) {
+            case Potentiometer::Event::VALUE_CHANGED: {
+                // Send brightness change command
+                ESP_LOGI(TAG, "Brightness changed to %.1f%%%%", percentage);
+                sendBrightnessChange(static_cast<uint8_t>(percentage));
+                break;
+            }
+            case Potentiometer::Event::MIN_REACHED:
+                ESP_LOGI(TAG, "Brightness at minimum");
+                break;
+                
+            case Potentiometer::Event::MAX_REACHED:
+                ESP_LOGI(TAG, "Brightness at maximum");
+                break;
+                
+            case Potentiometer::Event::CENTER_REACHED:
+                ESP_LOGI(TAG, "Brightness at center (50%%%%)");
+        }
+    } 
+    else if (potName == "SpeedPot") {
+        // Handle speed potentiometer
+        switch (event) {
+            case Potentiometer::Event::VALUE_CHANGED: {
+                // Send speed change command
+                ESP_LOGI(TAG, "Speed changed to %.1f%%%%", percentage);
+                sendSpeedChange(static_cast<uint8_t>(percentage));
+                break;
+            }
+            case Potentiometer::Event::MIN_REACHED:
+                ESP_LOGI(TAG, "Speed at minimum");
+                break;
+                
+            case Potentiometer::Event::MAX_REACHED:
+                ESP_LOGI(TAG, "Speed at maximum");
+                break;
+                
+            case Potentiometer::Event::CENTER_REACHED:
+                ESP_LOGI(TAG, "Speed at center (50%%%%)");
+                break;
+        }
     }
 }
 
@@ -127,6 +236,60 @@ esp_err_t Sender::init() {
     });
 
     ESP_LOGI(TAG, "Buttons initialized successfully");
+    
+    // Initialize potentiometers
+    Potentiometer::Config brightnessPotCfg = {
+        .name = "BrightnessPot",
+        .gpio_num = POT_BRIGHTNESS_GPIO_NUM,
+        .adc_unit = ADC_UNIT_1,
+        .adc_channel = ADC_CHANNEL_4,
+        .attenuation = Potentiometer::Attenuation::DB_12, // 12dB attenuation for better range
+        .poll_interval_ms = POT_POLL_INTERVAL_MS,
+        .change_threshold = POT_CHANGE_THRESHOLD,
+        .enable_center_event = true,
+        .center_threshold = POT_CENTER_THRESHOLD
+    };
+    
+    // Potentiometer::Config speedPotCfg = {
+    //     .name = "SpeedPot",
+    //     .gpio_num = POT_SPEED_GPIO_NUM,
+    //     .adc_unit = ADC_UNIT_1,
+    //     .adc_channel = ADC_CHANNEL_7,  // Channel for GPIO 35
+    //     .poll_interval_ms = POT_POLL_INTERVAL_MS,
+    //     .change_threshold = POT_CHANGE_THRESHOLD,
+    //     .enable_center_event = true,
+    //     .center_threshold = POT_CENTER_THRESHOLD
+    // };
+    
+    // Create potentiometer instances
+    brightnessPot = std::make_unique<Potentiometer>(brightnessPotCfg);
+    // speedPot = std::make_unique<Potentiometer>(speedPotCfg);
+    
+    // Initialize potentiometers
+    if (!brightnessPot->init()) {
+        ESP_LOGE(TAG, "Failed to initialize potentiometers");
+        return ESP_FAIL;
+    }
+    
+    // Register potentiometer callbacks
+    brightnessPot->registerCallback([this](Potentiometer::Event event, uint32_t value, float percentage) {
+        this->handlePotentiometerEvent("BrightnessPot", event, value, percentage);
+    });
+    
+    // speedPot->registerCallback([this](Potentiometer::Event event, uint32_t value, float percentage) {
+    //     this->handlePotentiometerEvent("SpeedPot", event, value, percentage);
+    // });
+    
+    // Start monitoring potentiometer values
+    brightnessPot->start();
+    // speedPot->start();
+
+    // Take an initial reading to ensure we send the correct value
+    // even if the potentiometer hasn't changed yet
+    float initialBrightnessPercentage = brightnessPot->getPercentage();
+    this->sendBrightnessChange(static_cast<uint8_t>(initialBrightnessPercentage));
+    
+    ESP_LOGI(TAG, "Potentiometers initialized successfully");
 
     // Register send and receive callbacks
     ESP_ERROR_CHECK(esp_now_register_send_cb(Sender::sendCallback));
@@ -154,7 +317,7 @@ esp_err_t Sender::init() {
 #endif
 
     // Start the testing loop task
-    xTaskCreate(sendLoop, "sendLoop", 2048, nullptr, 4, nullptr);
+    // xTaskCreate(sendLoop, "sendLoop", 2048, nullptr, 4, nullptr);
     xTaskCreate(processOutgoingMessages, "processOutgoingMessages", 2048, nullptr, 4, nullptr);
     xTaskCreate(sendKeepalive, "sendKeepalive", 2048, nullptr, 2, nullptr);
 
@@ -222,30 +385,8 @@ void Sender::recvCallback(const esp_now_recv_info_t *recv_info, const uint8_t *d
                 if (esp_now_add_peer(&peerInfo) == ESP_OK) {
                     ESP_LOGI(TAG, "Added peer: MAC=" MACSTR, MAC2STR(recv_info->src_addr));
 
-                    // Send a Registration Successful message back to the receiver
-                    size_t totalSize = sizeof(MessageData);
-
-                    auto *response = reinterpret_cast<MessageData *>(malloc(totalSize));
-                    if (!response) {
-                        ESP_LOGE(TAG, "Failed to allocate memory for Registration Successful message");
-                        return;
-                    }
-
-                    response->seq_num = getNextSequenceNumber(recv_info->src_addr);
-                    response->payload_type = static_cast<uint8_t>(PayloadType::RegistrationSuccessful);
-
-                    // Enqueue the response instead of sending it directly
-                    auto *responseParams = new SendParams;
-                    memcpy(responseParams->dest_mac, recv_info->src_addr, ESP_NOW_ETH_ALEN);
-                    memcpy(responseParams->raw_data, response, totalSize);
-                    responseParams->data_len = totalSize;
-
-                    if (xQueueSend(outgoingMessageQueue, &responseParams, portMAX_DELAY) != pdTRUE) {
-                        ESP_LOGE(TAG, "Failed to enqueue Registration Successful message");
-                        delete responseParams;
-                    }
-
-                    free(response);
+                    // Send registration response directly with the helper method
+                    Sender::getInstance().sendRegistrationResponse(recv_info->src_addr);
                 } else {
                     ESP_LOGE(TAG, "Failed to add peer: MAC=" MACSTR, MAC2STR(recv_info->src_addr));
                 }
@@ -359,8 +500,6 @@ void Sender::prepareSendParams(SendParams &sendParams, const uint8_t *payload, s
 void Sender::sendLoop(void *pvParameter) {
     ESP_LOGI(TAG, "Send loop task started");
 
-    static uint8_t payload[128]; // Adjust size as needed
-
     while (true) {
         // Check if there are any registered peers
         esp_now_peer_num_t peerCount = {};
@@ -371,16 +510,9 @@ void Sender::sendLoop(void *pvParameter) {
             vTaskDelay(1000 / portTICK_PERIOD_MS); // Delay before checking again
             continue;
         }
-
-        esp_fill_random(payload, sizeof(payload));
-
-        auto *sendParams = new SendParams;
-        prepareSendParams(*sendParams, payload, sizeof(payload), PayloadType::ChangePattern);
-
-        if (xQueueSend(outgoingMessageQueue, &sendParams, portMAX_DELAY) != pdTRUE) {
-            ESP_LOGE(TAG, "Failed to enqueue message");
-            delete sendParams;
-        }
+        
+        // Send a random pattern using the helper method
+        Sender::getInstance().sendPatternChange("RandomPattern_" + std::to_string(esp_random() % 10));
 
         // Delay for 1 second before sending the next message
         vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -401,16 +533,8 @@ void Sender::sendKeepalive(void *pvParameter) {
             continue;
         }
 
-        // Prepare the keepalive payload
-        uint8_t keepalivePayload[1] = {0}; // Minimal payload for keepalive
-
-        auto *sendParams = new SendParams;
-        prepareSendParams(*sendParams, keepalivePayload, sizeof(keepalivePayload), PayloadType::Keepalive);
-
-        if (xQueueSend(outgoingMessageQueue, &sendParams, portMAX_DELAY) != pdTRUE) {
-            ESP_LOGE(TAG, "Failed to enqueue keepalive message");
-            delete sendParams;
-        }
+        // Send keepalive using the helper method
+        Sender::getInstance().sendKeepaliveMessage();
 
         // Delay for 5 seconds before sending the next keepalive message
         vTaskDelay(5000 / portTICK_PERIOD_MS);
