@@ -30,11 +30,11 @@ Sender& Sender::getInstance() {
 }
 
 // Specialized helper methods for sending common payload types
-void Sender::sendPatternChange(const std::string& patternName, const uint8_t* destMac) {
+void Sender::sendPatternChange(PatternType patternType, const uint8_t* destMac) {
     ChangePatternPayload payload;
-    payload.patternName = patternName;
+    payload.patternType = patternType;
     sendPayload(payload, PayloadType::ChangePattern, destMac);
-    ESP_LOGI(TAG, "Sent pattern change: %s", patternName.c_str());
+    ESP_LOGI(TAG, "Sent pattern change: %d", static_cast<int>(patternType));
 }
 
 void Sender::sendBrightnessChange(uint8_t brightness, const uint8_t* destMac) {
@@ -109,11 +109,11 @@ void Sender::handleButtonEvent(const std::string& buttonName, Button::Event even
         case Button::Event::PRESSED:
             if (buttonName == "BlueButton") {
                 ESP_LOGI(TAG, "Blue button action: Sending blue pattern command");
-                sendPatternChange("BluePattern");
+                sendPatternChange(PatternType::BluePattern);
             } 
             else if (buttonName == "RedButton") {
                 ESP_LOGI(TAG, "Red button action: Sending red pattern command");
-                sendPatternChange("RedPattern");
+                sendPatternChange(PatternType::RedPattern);
             }
             break;
             
@@ -539,7 +539,8 @@ void Sender::sendLoop(void *pvParameter) {
         }
         
         // Send a random pattern using the helper method
-        Sender::getInstance().sendPatternChange("RandomPattern_" + std::to_string(esp_random() % 10));
+        PatternType randomPattern = static_cast<PatternType>(1 + (esp_random() % 7)); // Generate a random pattern type (1-7)
+        Sender::getInstance().sendPatternChange(randomPattern);
 
         // Delay for 1 second before sending the next message
         vTaskDelay(1000 / portTICK_PERIOD_MS);

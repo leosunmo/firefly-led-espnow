@@ -201,13 +201,16 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
     size_t expectedPayloadSize = 0;
     switch (payloadType) {
         case PayloadType::ChangePattern:
-            expectedPayloadSize = sizeof(ChangePatternPayload);
+            expectedPayloadSize = 1; // At least 1 byte for a non-empty pattern name
             break;
         case PayloadType::ChangeBrightness:
-            expectedPayloadSize = sizeof(ChangeBrightnessPayload);
+            expectedPayloadSize = sizeof(uint8_t); // A single byte for brightness level
+            break;
+        case PayloadType::ChangeSpeed:
+            expectedPayloadSize = sizeof(uint8_t); // A single byte for speed level
             break;
         case PayloadType::RegistrationSuccessful:
-            expectedPayloadSize = sizeof(RegistrationSuccessfulPayload);
+            expectedPayloadSize = 0; // Empty payload is fine
             break;
         case PayloadType::Keepalive:
             expectedPayloadSize = 0; // Keepalive has no additional payload
@@ -292,43 +295,46 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
     size_t payloadSize = data_len - sizeof(MessageData);
     switch (message->payload_type) {
         case PayloadType::ChangePattern: {
-            if (payloadSize < sizeof(ChangePatternPayload)) {
-                ESP_LOGE(TAG, "Payload size mismatch for ChangePatternPayload");
+            if (payloadSize < sizeof(uint8_t)) {
+                ESP_LOGE(TAG, "Empty payload for ChangePatternPayload");
                 return -1;
             }
             // Deserialize the payload properly
             ChangePatternPayload payload;
-            std::string patternName(reinterpret_cast<const char *>(rawMessage->payload), payloadSize);
-            payload.patternName = patternName;
+            payload.patternType = static_cast<PatternType>(rawMessage->payload[0]);
             message->parsed_payload = payload;
             break;
         }
         case PayloadType::ChangeBrightness: {
-            if (payloadSize < sizeof(ChangeBrightnessPayload)) {
+            if (payloadSize < sizeof(uint8_t)) {
                 ESP_LOGE(TAG, "Payload size mismatch for ChangeBrightnessPayload");
                 return -1;
             }
             ChangeBrightnessPayload payload;
-            std::memcpy(&payload, rawMessage->payload, sizeof(ChangeBrightnessPayload));
+            payload.brightnessLevel = rawMessage->payload[0];
+            message->parsed_payload = payload;
+            break;
+        }
+        case PayloadType::ChangeSpeed: {
+            if (payloadSize < sizeof(uint8_t)) {
+                ESP_LOGE(TAG, "Payload size mismatch for ChangeSpeedPayload");
+                return -1;
+            }
+            ChangeSpeedPayload payload;
+            payload.speedLevel = rawMessage->payload[0];
             message->parsed_payload = payload;
             break;
         }
         case PayloadType::RegistrationSuccessful: {
-            if (payloadSize < sizeof(RegistrationSuccessfulPayload)) {
-                ESP_LOGE(TAG, "Payload size mismatch for RegistrationSuccessfulPayload");
-                return -1;
-            }
+            // RegistrationSuccessful doesn't need payload data
             RegistrationSuccessfulPayload payload;
-            std::memcpy(&payload, rawMessage->payload, sizeof(RegistrationSuccessfulPayload));
             message->parsed_payload = payload;
             break;
         }
         case PayloadType::Keepalive: {
-            if (payloadSize < sizeof(KeepalivePayload)) {
-                ESP_LOGE(TAG, "Payload size mismatch for KeepalivePayload");
-                return -1;
-            }
-            // Keepalive has no additional payload
+            // Keepalive doesn't need payload data
+            KeepalivePayload payload;
+            message->parsed_payload = payload;
             break;
         }
         default:
