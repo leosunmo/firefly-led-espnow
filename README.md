@@ -44,5 +44,33 @@ To exit the monitoring session, press `Ctrl-]`.
 - `build/`: Build artifacts.
 - `esp-idf/`: ESP-IDF components.
 
+## Architecture
+
+### Payload System
+
+The project implements a type-safe payload system for ESP-NOW communications:
+
+1. **Payload Types**: Different message types are represented by structured classes:
+   - `ChangePatternPayload`: For changing LED patterns
+   - `ChangeBrightnessPayload`: For adjusting brightness
+   - `ChangeSpeedPayload`: For changing animation speed
+   - `RegisterRequestPayload`: For device registration
+   - `RegistrationSuccessfulPayload`: For confirming registration
+   - `KeepalivePayload`: For connection health checks
+
+2. **Serialization**: Each payload type implements a `serialize()` method that converts the structured data into bytes for transmission.
+
+3. **PayloadHelper**: A utility class that provides:
+   - Serialization methods for converting payload objects to bytes
+   - Deserialization methods for converting received bytes into structured payload objects
+   - Message parsing functionality for handling incoming ESP-NOW messages
+
+4. **Sender Helpers**: The `Sender` class provides convenience methods for common messaging tasks:
+   - `sendPatternChange(pattern)`
+   - `sendBrightnessChange(level)`
+   - `sendSpeedChange(level)`
+   - `sendKeepaliveMessage()`
+   - `sendRegistrationResponse(mac)`
+
 ## License
 This project is licensed under the MIT License. See the LICENSE file for details.

@@ -10,6 +10,11 @@
 #include "Messages.h"
 #include "Manager.h"
 #include "Button.h"
+#include "Potentiometer.h"
+#include "PayloadHelper.h"
+
+// Forward declaration for queue handle
+extern QueueHandle_t outgoingMessageQueue;
 
 class Sender {
 public:
@@ -22,6 +27,17 @@ public:
     
     // Initialize the sender
     esp_err_t init();
+    
+    // Helper template methods for sending payloads
+    template<typename T>
+    void sendPayload(const T& payload, PayloadType payloadType, const uint8_t* destMac = nullptr);
+    
+    // Convenience methods for sending common payloads
+    void sendPatternChange(const std::string& patternName, const uint8_t* destMac = nullptr);
+    void sendBrightnessChange(uint8_t brightness, const uint8_t* destMac = nullptr);
+    void sendSpeedChange(uint8_t speed, const uint8_t* destMac = nullptr);
+    void sendKeepaliveMessage(const uint8_t* destMac = nullptr);
+    void sendRegistrationResponse(const uint8_t* destMac);
 
 private:
     // Private constructor and destructor for singleton
@@ -31,9 +47,19 @@ private:
     // Button event handlers
     void handleButtonEvent(const std::string& buttonName, Button::Event event);
     
+    // Potentiometer event handler
+    void handlePotentiometerEvent(const std::string& potName, 
+                                Potentiometer::Event event,
+                                uint32_t value, 
+                                float percentage);
+    
     // Button instances
     std::unique_ptr<Button> blueButton;
     std::unique_ptr<Button> redButton;
+    
+    // Potentiometer instances
+    std::unique_ptr<Potentiometer> brightnessPot;
+    std::unique_ptr<Potentiometer> speedPot;
     
     // Static methods for ESP-NOW
     static void sendLoop(void *pvParameter);
@@ -45,5 +71,20 @@ private:
     static void logRegisteredPeers();
     static void sendKeepalive(void *pvParameter);
 };
+
+// Template method implementation
+template<typename T>
+void Sender::sendPayload(const T& payload, PayloadType payloadType, const uint8_t* destMac) {
+    std::vector<uint8_t> serializedPayload = PayloadHelper::serialize(payload);
+    auto* params = new SendParams;
+    
+    // If destination MAC is provided, copy it to the SendParams
+    if (destMac != nullptr) {
+        std::memcpy(params->dest_mac, destMac, ESP_NOW_ETH_ALEN);
+    }
+    
+    prepareSendParams(*params, serializedPayload.data(), serializedPayload.size(), payloadType);
+    xQueueSend(outgoingMessageQueue, &params, portMAX_DELAY);
+}
 
 #endif // SENDER_H

@@ -14,18 +14,56 @@
 // Define the payload types
 struct ChangePatternPayload {
     std::string patternName; // Name of the pattern to change to
+    
+    // Serialize the payload into a vector of bytes
+    std::vector<uint8_t> serialize() const {
+        // For string payload, just convert to vector of bytes
+        return std::vector<uint8_t>(patternName.begin(), patternName.end());
+    }
 };
 
 struct ChangeBrightnessPayload {
-    uint8_t brightnessLevel; // Brightness level (0-255)
+    uint8_t brightnessLevel; // Brightness level (0-100)
+    
+    // Serialize the payload into a vector of bytes
+    std::vector<uint8_t> serialize() const {
+        return {brightnessLevel};
+    }
+};
+
+struct ChangeSpeedPayload {
+    uint8_t speedLevel; // Speed level (0-100)
+    
+    // Serialize the payload into a vector of bytes
+    std::vector<uint8_t> serialize() const {
+        return {speedLevel};
+    }
 };
 
 // Payload type that receivers broadcast to register themselves with the sender
-struct RegisterRequestPayload {};
+struct RegisterRequestPayload {
+    // Serialize the payload into a vector of bytes
+    std::vector<uint8_t> serialize() const {
+        // Empty payload, return minimum required byte
+        return {0};
+    }
+};
 
-struct RegistrationSuccessfulPayload {};
+struct RegistrationSuccessfulPayload {
+    // Serialize the payload into a vector of bytes
+    std::vector<uint8_t> serialize() const {
+        // Empty payload, return minimum required byte
+        return {0};
+    }
+};
 
-struct KeepalivePayload {}; // Minimal payload for keepalive messages
+struct KeepalivePayload {
+    // Serialize the payload into a vector of bytes
+    std::vector<uint8_t> serialize() const {
+        // Empty payload, return minimum required byte
+        return {0};
+    }
+}; // Minimal payload for keepalive messages
 
 static constexpr uint8_t broadcastMac[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, broadcastMac, ESP_NOW_ETH_ALEN) == 0)
@@ -43,6 +81,7 @@ enum class PayloadType : uint8_t {
     RegisterPeer,
     ChangePattern,
     ChangeBrightness,
+    ChangeSpeed,
     RegisterRequest,
     RegistrationSuccessful,
     Keepalive
