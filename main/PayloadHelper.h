@@ -32,7 +32,9 @@ public:
     static ChangePatternPayload deserializePatternPayload(const uint8_t* data, size_t len) {
         ChangePatternPayload payload;
         if (data && len > 0) {
-            payload.patternName = std::string(reinterpret_cast<const char*>(data), len);
+            payload.patternType = static_cast<PatternType>(data[0]);
+        } else {
+            payload.patternType = PatternType::NoPattern;
         }
         return payload;
     }
@@ -81,10 +83,14 @@ public:
                 return deserializePatternPayload(data, len);
             case PayloadType::ChangeBrightness:
                 return deserializeBrightnessPayload(data, len);
+            case PayloadType::ChangeSpeed:
+                return deserializeSpeedPayload(data, len);
             case PayloadType::RegisterRequest:
                 return RegisterRequestPayload();
             case PayloadType::RegistrationSuccessful:
                 return RegistrationSuccessfulPayload();
+            case PayloadType::Keepalive:
+                return KeepalivePayload();
             default:
                 // Return empty pattern payload for unknown types
                 return ChangePatternPayload{};

@@ -33,7 +33,7 @@ public:
     void sendPayload(const T& payload, PayloadType payloadType, const uint8_t* destMac = nullptr);
     
     // Convenience methods for sending common payloads
-    void sendPatternChange(const std::string& patternName, const uint8_t* destMac = nullptr);
+    void sendPatternChange(PatternType patternType, const uint8_t* destMac = nullptr);
     void sendBrightnessChange(uint8_t brightness, const uint8_t* destMac = nullptr);
     void sendSpeedChange(uint8_t speed, const uint8_t* destMac = nullptr);
     void sendKeepaliveMessage(const uint8_t* destMac = nullptr);

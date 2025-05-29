@@ -11,14 +11,27 @@
 #include "Manager.h"
 #include <string>
 
+// Define pattern types as enums
+enum class PatternType : uint8_t {
+    NoPattern = 0,
+    RedPattern = 1,
+    GreenPattern = 2,
+    BluePattern = 3,
+    RainbowPattern = 4,
+    FirePattern = 5,
+    SparklePattern = 6,
+    WavePattern = 7,
+    // Add more patterns as needed
+};
+
 // Define the payload types
 struct ChangePatternPayload {
-    std::string patternName; // Name of the pattern to change to
+    PatternType patternType; // Type of pattern to change to
     
     // Serialize the payload into a vector of bytes
     std::vector<uint8_t> serialize() const {
-        // For string payload, just convert to vector of bytes
-        return std::vector<uint8_t>(patternName.begin(), patternName.end());
+        // Simply serialize the enum value as a single byte
+        return {static_cast<uint8_t>(patternType)};
     }
 };
 
@@ -75,7 +88,7 @@ enum {
 };
 
 // Define a variant to hold different payload types
-using Payload = std::variant<ChangePatternPayload, ChangeBrightnessPayload, RegisterRequestPayload, RegistrationSuccessfulPayload>;
+using Payload = std::variant<ChangePatternPayload, ChangeBrightnessPayload, ChangeSpeedPayload, RegisterRequestPayload, RegistrationSuccessfulPayload, KeepalivePayload>;
 
 enum class PayloadType : uint8_t {
     RegisterPeer,
