@@ -71,7 +71,7 @@
     "makefile.configureOnOpen": true,
     "idf.pythonInstallPath": "/usr/bin/python3",
     "idf.buildPath": "${workspaceFolder}/build",
-    "C_Cpp.default.configurationProvider": "ms-vscode.makefile-tools",
+    "C_Cpp.default.configurationProvider": "esp-tools.esp-idf-extension",
     "idf.flashType": "UART",
     "idf.espIdfPath": "${userHome}/esp/v5.4.1/esp-idf",
     "idf.toolsPath": "${userHome}/.espressif",

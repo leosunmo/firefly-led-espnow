@@ -33,3 +33,5 @@ picotool/
 # Debugging files
 pdm_viz/venv/
 
+# Managed IDF components
+managed_components/
