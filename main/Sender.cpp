@@ -19,6 +19,9 @@ static const char *TAG = "Sender";
 // Make outgoingMessageQueue global so it can be accessed by template methods
 QueueHandle_t outgoingMessageQueue = nullptr;
 static std::unordered_map<std::string, uint16_t> peerSequenceNumbers; // Sequence numbers per peer
+// MAC addresses of registered peers with number of failed sends.
+// Used for dropping registered peers that fail to respond.
+static std::unordered_map<std::string, uint8_t> peerFailedSend;
 
 // Singleton instance implementation
 Sender& Sender::getInstance() {
@@ -349,6 +352,15 @@ void Sender::sendCallback(const uint8_t *mac_addr, esp_now_send_status_t status)
 
     if (status != ESP_NOW_SEND_SUCCESS) {
         ESP_LOGW(TAG, "Send failed: MAC=" MACSTR, MAC2STR(mac_addr));
+        // Increment failed send count for this peer
+        std::string peerKey(reinterpret_cast<const char *>(mac_addr), ESP_NOW_ETH_ALEN);
+        peerFailedSend[peerKey]++;
+        ESP_LOGD(TAG, "Failed sends for peer " MACSTR ": %d", MAC2STR(mac_addr), peerFailedSend[peerKey]);
+        if (peerFailedSend[peerKey] >= ESPNOW_MAX_PEER_FAIL) {
+            ESP_LOGW(TAG, "Dropping peer " MACSTR " due to too many failed sends", MAC2STR(mac_addr));
+            esp_now_del_peer(mac_addr);
+            peerFailedSend.erase(peerKey); // Remove from failed sends
+        }
     }
 }
 
@@ -384,13 +396,19 @@ void Sender::recvCallback(const esp_now_recv_info_t *recv_info, const uint8_t *d
 
                 if (esp_now_add_peer(&peerInfo) == ESP_OK) {
                     ESP_LOGI(TAG, "Added peer: MAC=" MACSTR, MAC2STR(recv_info->src_addr));
-
-                    // Send registration response directly with the helper method
-                    Sender::getInstance().sendRegistrationResponse(recv_info->src_addr);
                 } else {
                     ESP_LOGE(TAG, "Failed to add peer: MAC=" MACSTR, MAC2STR(recv_info->src_addr));
+                    break;
                 }
+            } else {
+                ESP_LOGI(TAG, "Peer already registered: MAC=" MACSTR, MAC2STR(recv_info->src_addr));
+                // Reset failed send count as we got a message from this peer
+                std::string peerKey(reinterpret_cast<const char *>(recv_info->src_addr), ESP_NOW_ETH_ALEN);
+                peerFailedSend[peerKey] = 0;
             }
+            
+            // Always send registration response regardless of whether the peer is new or existing
+            Sender::getInstance().sendRegistrationResponse(recv_info->src_addr);
             break;
         }
 
@@ -436,6 +454,15 @@ void Sender::processOutgoingMessages(void *pvParameter) {
                 ESP_LOGI(TAG, "Message sent successfully to %d receivers", peerCount.total_num);
             } else {
                 ESP_LOGE(TAG, "Failed to send message error=%s", esp_err_to_name(result));
+                // Increment failed send count for this peer
+                std::string peerKey(reinterpret_cast<const char *>(sendParams->dest_mac), ESP_NOW_ETH_ALEN);
+                peerFailedSend[peerKey]++;
+                ESP_LOGD(TAG, "Failed sends for peer " MACSTR ": %d", MAC2STR(sendParams->dest_mac), peerFailedSend[peerKey]);
+                if (peerFailedSend[peerKey] >= ESPNOW_MAX_PEER_FAIL) {
+                    ESP_LOGW(TAG, "Dropping peer " MACSTR " due to too many failed sends", MAC2STR(sendParams->dest_mac));
+                    esp_now_del_peer(sendParams->dest_mac);
+                    peerFailedSend.erase(peerKey); // Remove from failed sends
+                }
             }
 
             delete sendParams;

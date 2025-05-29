@@ -61,6 +61,9 @@ private:
     std::unique_ptr<Potentiometer> brightnessPot;
     std::unique_ptr<Potentiometer> speedPot;
     
+    // Static values for ESP-NOW
+    static constexpr size_t ESPNOW_MAX_PEER_FAIL = 2; // Maximum failed sends before dropping a peer
+
     // Static methods for ESP-NOW
     static void sendLoop(void *pvParameter);
     static void sendCallback(const uint8_t *mac_addr, esp_now_send_status_t status);

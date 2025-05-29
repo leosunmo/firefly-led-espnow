@@ -23,11 +23,15 @@ static const char *TAG = "Receiver";
 static QueueHandle_t receiveQueue = nullptr;
 std::unordered_map<std::string, uint16_t> Receiver::peerLastSequenceNumbers; // Last received sequence numbers per peer
 bool volatile Receiver::isRegistered = false; // Registration status
+// Initialize to current time to avoid immediate timeout
 static uint32_t lastKeepaliveTime = 0; // Track the last keepalive time
 
 void Receiver::init() {
     esp_log_level_set(TAG, RECEIVER_LOG_LEVEL);
     ESP_LOGI(TAG, "Initializing ESPNOW Receiver");
+    
+    // Initialize lastKeepaliveTime to the current time to prevent immediate timeouts
+    lastKeepaliveTime = xTaskGetTickCount() * portTICK_PERIOD_MS;
 
     // Create a queue for MessageEnvelope.
     receiveQueue = xQueueCreate(ESPNOW_QUEUE_SIZE, sizeof(MessageEnvelope));
@@ -121,19 +125,54 @@ void Receiver::recvLoop(void *pvParameter) {
                 ESP_LOGI(TAG, "Received registration request from MAC= " MACSTR,
                          MAC2STR(recvMsg->src_mac));
                 isRegistered = true; // Set registration status
+                lastKeepaliveTime = xTaskGetTickCount() * portTICK_PERIOD_MS; // Update keepalive time
+            }
+            
+            if (message->payload_type == PayloadType::RegistrationSuccessful) {
+                // Handle registration successful response
+                ESP_LOGI(TAG, "Received registration successful from MAC= " MACSTR,
+                         MAC2STR(recvMsg->src_mac));
+                
+                // If we weren't registered before, reset sequence numbers for clean start
+                if (!isRegistered) {
+                    peerLastSequenceNumbers.clear();
+                    ESP_LOGI(TAG, "Cleared sequence number tracking on new registration");
+                }
+                
+                // Create a key for this sender's MAC address
+                std::string peerKey(reinterpret_cast<const char *>(recvMsg->src_mac), ESP_NOW_ETH_ALEN);
+                
+                // Reset the sequence number for this specific peer
+                peerLastSequenceNumbers[peerKey] = 0;
+                ESP_LOGI(TAG, "Reset sequence number for peer: " MACSTR, MAC2STR(recvMsg->src_mac));
+                
+                isRegistered = true; // Set registration status
+                lastKeepaliveTime = xTaskGetTickCount() * portTICK_PERIOD_MS; // Update keepalive time
             }
 
             if (message->payload_type == PayloadType::Keepalive) {
                 ESP_LOGD(TAG, "Received keepalive message from MAC= " MACSTR, MAC2STR(recvMsg->src_mac));
                 lastKeepaliveTime = xTaskGetTickCount() * portTICK_PERIOD_MS; // Update the last keepalive time
+                
+                // Treat keepalive as confirmation of registration
+                if (!isRegistered) {
+                    ESP_LOGI(TAG, "Received keepalive, setting isRegistered to true");
+                    isRegistered = true;
+                }
+                
                 delete message; // No further processing needed for keepalive
                 delete recvMsg;
                 continue;
             }
-
-            if (!isRegistered && message->type == ESPNOW_DATA_UNICAST) {
-                ESP_LOGI(TAG, "Received unicast message, setting isRegistered to true");
-                isRegistered = true;
+            
+            // Update keepalive time for any valid message from a known peer
+            if (message->type == ESPNOW_DATA_UNICAST) {
+                lastKeepaliveTime = xTaskGetTickCount() * portTICK_PERIOD_MS;
+                
+                if (!isRegistered) {
+                    ESP_LOGI(TAG, "Received unicast message, setting isRegistered to true");
+                    isRegistered = true;
+                }
             }
 
             // TODO: Process the parsed message
@@ -213,15 +252,36 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
 
     // Check for sequence number wrap-around
     std::string peerKey(reinterpret_cast<const char *>(src_addr), ESP_NOW_ETH_ALEN);
-    uint16_t lastSeqNum = peerLastSequenceNumbers[peerKey];
-
-    if ((rawMessage->seq_num > lastSeqNum) ||
-        (lastSeqNum > 200 && rawMessage->seq_num < 50)) { // Handle wrap-around
+    
+    // Use the find method to check if this is a new peer
+    auto seqNumIt = peerLastSequenceNumbers.find(peerKey);
+    bool isNewPeer = (seqNumIt == peerLastSequenceNumbers.end());
+    
+    // If it's a new peer or we're handling RegistrationSuccessful, accept any sequence number
+    if (isNewPeer || payloadType == PayloadType::RegistrationSuccessful) {
+        ESP_LOGI(TAG, "New peer or registration message, accepting seq_num=%d", rawMessage->seq_num);
         peerLastSequenceNumbers[peerKey] = rawMessage->seq_num;
     } else {
-        ESP_LOGW(TAG, "Ignoring duplicate or out-of-order message: seq_num=%d, lastSeqNum=%d",
-                 rawMessage->seq_num, lastSeqNum);
-        return -1; // Ignore the message
+        uint16_t lastSeqNum = seqNumIt->second;
+        
+        // Check if this is a valid next sequence number or wrap-around
+        if ((rawMessage->seq_num > lastSeqNum) ||
+            (lastSeqNum > 200 && rawMessage->seq_num < 50)) { // Handle wrap-around
+            // Valid sequence number, update our tracking
+            peerLastSequenceNumbers[peerKey] = rawMessage->seq_num;
+            ESP_LOGD(TAG, "Valid sequence: prev=%d, current=%d", lastSeqNum, rawMessage->seq_num);
+        } else {
+            // Special case: if sequence starts from 0/1, it could be a restarted sender
+            if (rawMessage->seq_num <= 1 && lastSeqNum > 100) {
+                ESP_LOGI(TAG, "Detected sender restart: prev=%d, current=%d. Accepting message.", 
+                        lastSeqNum, rawMessage->seq_num);
+                peerLastSequenceNumbers[peerKey] = rawMessage->seq_num;
+            } else {
+                ESP_LOGW(TAG, "Ignoring duplicate or out-of-order message: seq_num=%d, lastSeqNum=%d",
+                        rawMessage->seq_num, lastSeqNum);
+                return -1; // Ignore the message
+            }
+        }
     }
 
     // Set the message type based on the source address
@@ -330,10 +390,24 @@ void Receiver::checkKeepalive(void *pvParameter) {
 
     while (true) {
         uint32_t currentTime = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        uint32_t timeSinceLastKeepalive = currentTime - lastKeepaliveTime;
 
-        if (isRegistered && (currentTime - lastKeepaliveTime > 10000)) { // 10-second timeout
-            ESP_LOGW(TAG, "Keepalive timeout. Restarting registration broadcast.");
+        // Add more debugging at ESP_LOGD level
+        ESP_LOGD(TAG, "Keepalive check: isRegistered=%d, timeSinceLastKeepalive=%lu ms", 
+                 isRegistered ? 1 : 0, timeSinceLastKeepalive);
+
+        if (isRegistered && (timeSinceLastKeepalive > 10000)) { // 10-second timeout
+            ESP_LOGW(TAG, "Keepalive timeout after %lu ms. Restarting registration broadcast.", 
+                     timeSinceLastKeepalive);
+            
+            // Reset registration status
             isRegistered = false;
+            
+            // Clear the sequence number tracking to accept messages from restarted sender
+            peerLastSequenceNumbers.clear();
+            ESP_LOGI(TAG, "Cleared sequence number tracking for all peers");
+            
+            // Start registration broadcast
             xTaskCreate(broadcastRegistration, "broadcastRegistration", 2048, nullptr, 4, nullptr);
         }
 
