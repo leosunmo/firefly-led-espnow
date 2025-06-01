@@ -2,6 +2,7 @@
 #include "Messages.h"
 #include "Manager.h"
 #include "config.h"
+#include "UARTManager.h"  // Add UARTManager include
 #include "esp_log.h"
 #include "esp_now.h"
 #include "esp_mac.h"
@@ -32,6 +33,13 @@ void Receiver::init() {
     
     // Initialize lastKeepaliveTime to the current time to prevent immediate timeouts
     lastKeepaliveTime = xTaskGetTickCount() * portTICK_PERIOD_MS;
+
+    // Initialize UART Manager for communication with RP2040
+    esp_err_t uart_err = UARTManager::getInstance().init();
+    if (uart_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize UART Manager: %s", esp_err_to_name(uart_err));
+        // Continue anyway as ESPNOW might still be useful
+    }
 
     // Create a queue for MessageEnvelope.
     receiveQueue = xQueueCreate(ESPNOW_QUEUE_SIZE, sizeof(MessageEnvelope));
@@ -162,7 +170,7 @@ void Receiver::recvLoop(void *pvParameter) {
                 
                 delete message; // No further processing needed for keepalive
                 delete recvMsg;
-                continue;
+                continue; // Skip further processing for keepalive
             }
             
             // Update keepalive time for any valid message from a known peer
@@ -175,9 +183,12 @@ void Receiver::recvLoop(void *pvParameter) {
                 }
             }
 
-            // TODO: Process the parsed message
+            // Process the parsed message with UARTManager
             ESP_LOGI(TAG, "Parsed ESPNOW message: type=%d",
                      static_cast<int>(message->payload_type));
+                     
+            // Forward valid messages to the RP2040 via UART
+            UARTManager::getInstance().processESPNOWMessage(message);
 
             // Free the allocated message and received message
             delete message;
@@ -208,6 +219,12 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
             break;
         case PayloadType::ChangeSpeed:
             expectedPayloadSize = sizeof(uint8_t); // A single byte for speed level
+            break;
+        case PayloadType::ChangeHue:
+            expectedPayloadSize = sizeof(uint16_t); // Two bytes for hue value (0-360)
+            break;
+        case PayloadType::EffectPunch:
+            expectedPayloadSize = sizeof(uint8_t); // A single byte for punch intensity (0-100)
             break;
         case PayloadType::RegistrationSuccessful:
             expectedPayloadSize = 0; // Empty payload is fine
@@ -290,7 +307,6 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
     // Set the message type based on the source address
     message->type = IS_BROADCAST_ADDR(src_addr) ? ESPNOW_DATA_BROADCAST : ESPNOW_DATA_UNICAST;
 
-
     // Parse the payload based on the payload type
     size_t payloadSize = data_len - sizeof(MessageData);
     switch (message->payload_type) {
@@ -322,6 +338,26 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
             }
             ChangeSpeedPayload payload;
             payload.speedLevel = rawMessage->payload[0];
+            message->parsed_payload = payload;
+            break;
+        }
+        case PayloadType::ChangeHue: {
+            if (payloadSize < sizeof(uint16_t)) {
+                ESP_LOGE(TAG, "Payload size mismatch for ChangeHuePayload");
+                return -1;
+            }
+            ChangeHuePayload payload;
+            payload.hueVal = (rawMessage->payload[0] << 8) | rawMessage->payload[1]; // Assuming big-endian
+            message->parsed_payload = payload;
+            break;
+        }
+        case PayloadType::EffectPunch: {
+            if (payloadSize < sizeof(uint8_t)) {
+                ESP_LOGE(TAG, "Payload size mismatch for EffectPunchPayload");
+                return -1;
+            }
+            EffectPunchPayload payload;
+            payload.intensity = rawMessage->payload[0];
             message->parsed_payload = payload;
             break;
         }
