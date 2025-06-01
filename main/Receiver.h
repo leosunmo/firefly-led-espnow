@@ -6,6 +6,7 @@
 #include "freertos/queue.h"
 #include "esp_now.h"
 #include "Messages.h"
+#include "UARTManager.h"
 #include <unordered_map>
 
 class Receiver {

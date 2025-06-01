@@ -44,12 +44,34 @@ struct ChangeBrightnessPayload {
     }
 };
 
+struct ChangeHuePayload {
+    uint16_t hueVal; // hue value 0-360
+    
+    // Serialize the payload into a vector of bytes
+    std::vector<uint8_t> serialize() const {
+        std::vector<uint8_t> result;
+        // Split the 16-bit value into two bytes (little-endian)
+        result.push_back(hueVal & 0xFF);          // Low byte
+        result.push_back((hueVal >> 8) & 0xFF);   // High byte
+        return result;
+    }
+};
+
 struct ChangeSpeedPayload {
     uint8_t speedLevel; // Speed level (0-100)
     
     // Serialize the payload into a vector of bytes
     std::vector<uint8_t> serialize() const {
         return {speedLevel};
+    }
+};
+
+struct EffectPunchPayload {
+    uint8_t intensity; // Punch effect intensity (0-100)
+    
+    // Serialize the payload into a vector of bytes
+    std::vector<uint8_t> serialize() const {
+        return {intensity};
     }
 };
 
@@ -88,12 +110,14 @@ enum {
 };
 
 // Define a variant to hold different payload types
-using Payload = std::variant<ChangePatternPayload, ChangeBrightnessPayload, ChangeSpeedPayload, RegisterRequestPayload, RegistrationSuccessfulPayload, KeepalivePayload>;
+using Payload = std::variant<EffectPunchPayload, ChangePatternPayload, ChangeBrightnessPayload, ChangeHuePayload, ChangeSpeedPayload, RegisterRequestPayload, RegistrationSuccessfulPayload, KeepalivePayload>;
 
 enum class PayloadType : uint8_t {
     RegisterPeer,
+    EffectPunch,
     ChangePattern,
     ChangeBrightness,
+    ChangeHue,
     ChangeSpeed,
     RegisterRequest,
     RegistrationSuccessful,

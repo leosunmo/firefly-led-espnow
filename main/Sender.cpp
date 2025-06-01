@@ -37,6 +37,13 @@ void Sender::sendPatternChange(PatternType patternType, const uint8_t* destMac) 
     ESP_LOGI(TAG, "Sent pattern change: %d", static_cast<int>(patternType));
 }
 
+void Sender::sendHueChange(uint16_t hue, const uint8_t* destMac) {
+    ChangeHuePayload payload;
+    payload.hueVal = hue;
+    sendPayload(payload, PayloadType::ChangeHue, destMac);
+    ESP_LOGI(TAG, "Sent hue change: %ul", hue);
+}
+
 void Sender::sendBrightnessChange(uint8_t brightness, const uint8_t* destMac) {
     ChangeBrightnessPayload payload;
     payload.brightnessLevel = brightness;
@@ -49,6 +56,13 @@ void Sender::sendSpeedChange(uint8_t speed, const uint8_t* destMac) {
     payload.speedLevel = speed;
     sendPayload(payload, PayloadType::ChangeSpeed, destMac);
     ESP_LOGI(TAG, "Sent speed change: %u%%%%", speed);
+}
+
+void Sender::sendEffectPunch(uint8_t intensity, const uint8_t* destMac) {
+    EffectPunchPayload payload;
+    payload.intensity = intensity;
+    sendPayload(payload, PayloadType::EffectPunch, destMac);
+    ESP_LOGI(TAG, "Sent effect punch: %u%% intensity", intensity);
 }
 
 void Sender::sendKeepaliveMessage(const uint8_t* destMac) {
