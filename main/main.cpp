@@ -35,6 +35,7 @@ extern "C" {
 #include "Manager.h"
 #include "Sender.h"
 #include "Receiver.h"
+#include "InputManager.h"
 #include "config.h"
 
 extern "C" void app_main() {
