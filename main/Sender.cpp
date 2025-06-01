@@ -10,8 +10,8 @@
 #include <cstring>
 #include <cstdlib>
 #include <unordered_map>
-#include "Button.h"
-#include "Potentiometer.h"
+#include <algorithm> // For min/max
+#include "InputManager.h" // Centralized input management
 #include "PayloadHelper.h"
 
 static const char *TAG = "Sender";
@@ -83,133 +83,14 @@ void Sender::sendRegistrationResponse(const uint8_t* destMac) {
 }
 
 // Constructor and destructor implementation
-Sender::Sender() : blueButton(nullptr), redButton(nullptr), 
-                  brightnessPot(nullptr), speedPot(nullptr) {
+Sender::Sender() {
     // Constructor implementation
     ESP_LOGI(TAG, "Sender singleton instance created");
 }
 
 Sender::~Sender() {
-    // Stop potentiometer tasks first
-    if (brightnessPot) {
-        brightnessPot->stop();
-    }
-    
-    if (speedPot) {
-        speedPot->stop();
-    }
-    
-    // Destructor implementation - Smart pointer objects will be automatically deleted
+    // Destructor implementation - Input management now handled by InputManager
     ESP_LOGW(TAG, "Sender singleton instance destroyed");
-}
-
-// Button event handler implementation as class member
-void Sender::handleButtonEvent(const std::string& buttonName, Button::Event event) {
-    // Descriptive strings for each event type
-    const char* eventNames[] = {
-        "PRESSED",
-        "DOUBLE_PRESSED", 
-        "LONG_PRESSED", 
-        "RELEASED"
-    };
-    
-    // Log the button event with detailed information
-    ESP_LOGI(TAG, "Button Event: %s - %s", 
-             buttonName.c_str(), 
-             eventNames[static_cast<int>(event)]);
-    
-    // Button-specific actions
-    switch (event) {
-        case Button::Event::PRESSED:
-            if (buttonName == "BlueButton") {
-                ESP_LOGI(TAG, "Blue button action: Sending blue pattern command");
-                sendPatternChange(PatternType::BluePattern);
-            } 
-            else if (buttonName == "RedButton") {
-                ESP_LOGI(TAG, "Red button action: Sending red pattern command");
-                sendPatternChange(PatternType::RedPattern);
-            }
-            break;
-            
-        case Button::Event::DOUBLE_PRESSED:
-            // Example double press action: Toggle brightness
-            ESP_LOGI(TAG, "%s double pressed: Toggle brightness", buttonName.c_str());
-            break;
-            
-        case Button::Event::LONG_PRESSED:
-            // Example long press action: Power off/on
-            ESP_LOGI(TAG, "%s long pressed: Power toggle", buttonName.c_str());
-            break;
-            
-        case Button::Event::RELEASED:
-            // Usually no specific action needed on release
-            break;
-    }
-}
-
-// Potentiometer event handler implementation
-void Sender::handlePotentiometerEvent(const std::string& potName, 
-                                    Potentiometer::Event event, 
-                                    uint32_t value, 
-                                    float percentage) {
-    // Descriptive strings for each event type
-    const char* eventNames[] = {
-        "VALUE_CHANGED",
-        "MIN_REACHED", 
-        "MAX_REACHED", 
-        "CENTER_REACHED"
-    };
-    
-    // Log the potentiometer event with detailed information
-    ESP_LOGI(TAG, "Potentiometer Event: %s - %s, Value: %lu (%.1f%%)", 
-             potName.c_str(), 
-             eventNames[static_cast<int>(event)],
-             value, percentage);
-             
-    // Handle specific potentiometer events
-    if (potName == "BrightnessPot") {
-        // Handle brightness potentiometer
-        switch (event) {
-            case Potentiometer::Event::VALUE_CHANGED: {
-                // Send brightness change command
-                ESP_LOGI(TAG, "Brightness changed to %.1f%%%%", percentage);
-                sendBrightnessChange(static_cast<uint8_t>(percentage));
-                break;
-            }
-            case Potentiometer::Event::MIN_REACHED:
-                ESP_LOGI(TAG, "Brightness at minimum");
-                break;
-                
-            case Potentiometer::Event::MAX_REACHED:
-                ESP_LOGI(TAG, "Brightness at maximum");
-                break;
-                
-            case Potentiometer::Event::CENTER_REACHED:
-                ESP_LOGI(TAG, "Brightness at center (50%%%%)");
-        }
-    } 
-    else if (potName == "SpeedPot") {
-        // Handle speed potentiometer
-        switch (event) {
-            case Potentiometer::Event::VALUE_CHANGED: {
-                // Send speed change command
-                ESP_LOGI(TAG, "Speed changed to %.1f%%%%", percentage);
-                sendSpeedChange(static_cast<uint8_t>(percentage));
-                break;
-            }
-            case Potentiometer::Event::MIN_REACHED:
-                ESP_LOGI(TAG, "Speed at minimum");
-                break;
-                
-            case Potentiometer::Event::MAX_REACHED:
-                ESP_LOGI(TAG, "Speed at maximum");
-                break;
-                
-            case Potentiometer::Event::CENTER_REACHED:
-                ESP_LOGI(TAG, "Speed at center (50%%%%)");
-                break;
-        }
-    }
 }
 
 esp_err_t Sender::init() {
@@ -223,90 +104,23 @@ esp_err_t Sender::init() {
         return ESP_FAIL;
     }
 
-    Button::Config blueButtonCfg = {
-        .name = "BlueButton",
-        .gpio_num = BUTTONBLUE_GPIO_NUM,
-        .active_low = true, // Assuming active low for the button
-        .long_press_time_ms = CONFIG_BUTTON_LONG_PRESS_TIME_MS,
-        .short_press_time_ms = CONFIG_BUTTON_SHORT_PRESS_TIME_MS
-    };
-
-    Button::Config redButtonCfg = {
-        .name = "RedButton",
-        .gpio_num = BUTTONRED_GPIO_NUM,
-        .active_low = true, // Assuming active low for the button
-        .long_press_time_ms = CONFIG_BUTTON_LONG_PRESS_TIME_MS,
-        .short_press_time_ms = CONFIG_BUTTON_SHORT_PRESS_TIME_MS
-    };
-
-    // Create button instances as class members so they persist beyond this function
-    blueButton = std::make_unique<Button>(blueButtonCfg);
-    redButton = std::make_unique<Button>(redButtonCfg);
-
-    // Create button callbacks with lambdas that capture the button name
-    blueButton->registerCallback([this](Button::Event event) {
-        this->handleButtonEvent("BlueButton", event);
-    });
-
-    redButton->registerCallback([this](Button::Event event) {
-        this->handleButtonEvent("RedButton", event);
-    });
-
-    ESP_LOGI(TAG, "Buttons initialized successfully");
-    
-    // Initialize potentiometers
-    Potentiometer::Config brightnessPotCfg = {
-        .name = "BrightnessPot",
-        .gpio_num = POT_BRIGHTNESS_GPIO_NUM,
-        .adc_unit = ADC_UNIT_1,
-        .adc_channel = ADC_CHANNEL_4,
-        .attenuation = Potentiometer::Attenuation::DB_12, // 12dB attenuation for better range
-        .poll_interval_ms = POT_POLL_INTERVAL_MS,
-        .change_threshold = POT_CHANGE_THRESHOLD,
-        .enable_center_event = true,
-        .center_threshold = POT_CENTER_THRESHOLD
-    };
-    
-    // Potentiometer::Config speedPotCfg = {
-    //     .name = "SpeedPot",
-    //     .gpio_num = POT_SPEED_GPIO_NUM,
-    //     .adc_unit = ADC_UNIT_1,
-    //     .adc_channel = ADC_CHANNEL_7,  // Channel for GPIO 35
-    //     .poll_interval_ms = POT_POLL_INTERVAL_MS,
-    //     .change_threshold = POT_CHANGE_THRESHOLD,
-    //     .enable_center_event = true,
-    //     .center_threshold = POT_CENTER_THRESHOLD
-    // };
-    
-    // Create potentiometer instances
-    brightnessPot = std::make_unique<Potentiometer>(brightnessPotCfg);
-    // speedPot = std::make_unique<Potentiometer>(speedPotCfg);
-    
-    // Initialize potentiometers
-    if (!brightnessPot->init()) {
-        ESP_LOGE(TAG, "Failed to initialize potentiometers");
-        return ESP_FAIL;
+    // Initialize the input manager (handles buttons, potentiometers, etc.)
+    esp_err_t input_err = InputManager::getInstance().init();
+    if (input_err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize InputManager: %s", esp_err_to_name(input_err));
+        // Continue anyway, other functionality might still work
+    } else {
+        // Set up input handlers with the input manager
+        setupInputHandlers();
+        ESP_LOGI(TAG, "Input handlers set up successfully");
+        
+        // Take an initial reading to ensure we send the correct brightness value
+        float initialBrightnessPercentage = InputManager::getInstance().getPotPercentage(PotentiometerId::BRIGHTNESS_POT);
+        if (initialBrightnessPercentage >= 0) {
+            this->sendBrightnessChange(static_cast<uint8_t>(initialBrightnessPercentage));
+            ESP_LOGI(TAG, "Initial brightness value sent: %.1f%%", initialBrightnessPercentage);
+        }
     }
-    
-    // Register potentiometer callbacks
-    brightnessPot->registerCallback([this](Potentiometer::Event event, uint32_t value, float percentage) {
-        this->handlePotentiometerEvent("BrightnessPot", event, value, percentage);
-    });
-    
-    // speedPot->registerCallback([this](Potentiometer::Event event, uint32_t value, float percentage) {
-    //     this->handlePotentiometerEvent("SpeedPot", event, value, percentage);
-    // });
-    
-    // Start monitoring potentiometer values
-    brightnessPot->start();
-    // speedPot->start();
-
-    // Take an initial reading to ensure we send the correct value
-    // even if the potentiometer hasn't changed yet
-    float initialBrightnessPercentage = brightnessPot->getPercentage();
-    this->sendBrightnessChange(static_cast<uint8_t>(initialBrightnessPercentage));
-    
-    ESP_LOGI(TAG, "Potentiometers initialized successfully");
 
     // Register send and receive callbacks
     ESP_ERROR_CHECK(esp_now_register_send_cb(Sender::sendCallback));

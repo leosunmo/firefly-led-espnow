@@ -9,8 +9,7 @@
 #include "esp_now.h"
 #include "Messages.h"
 #include "Manager.h"
-#include "Button.h"
-#include "Potentiometer.h"
+#include "InputManager.h" // Use InputManager for all input devices
 #include "PayloadHelper.h"
 
 // Forward declaration for queue handle
@@ -46,22 +45,8 @@ private:
     Sender();
     ~Sender();
     
-    // Button event handlers
-    void handleButtonEvent(const std::string& buttonName, Button::Event event);
-    
-    // Potentiometer event handler
-    void handlePotentiometerEvent(const std::string& potName, 
-                                Potentiometer::Event event,
-                                uint32_t value, 
-                                float percentage);
-    
-    // Button instances
-    std::unique_ptr<Button> blueButton;
-    std::unique_ptr<Button> redButton;
-    
-    // Potentiometer instances
-    std::unique_ptr<Potentiometer> brightnessPot;
-    std::unique_ptr<Potentiometer> speedPot;
+    // Set up input handlers for all devices
+    void setupInputHandlers();
     
     // Static values for ESP-NOW
     static constexpr size_t ESPNOW_MAX_PEER_FAIL = 2; // Maximum failed sends before dropping a peer
