@@ -198,8 +198,12 @@ private:
     void handleEncoderEvent(EncoderId encoderId, Encoder::Event event, int32_t position);
     
     // Button related storage
-    struct ButtonInfo : public Button::Config {
-        std::unique_ptr<Button> button;
+    struct ButtonInfo {
+        std::string name;                   // Button name
+        uint8_t pin;                        // TCA6408A pin number (0-7)
+        bool active_low;                    // true if button is active low
+        uint16_t debounce_time_ms;          // Debounce time in ms
+        std::unique_ptr<Button> button;     // Button instance
         std::function<void(Button::Event)> generalHandler;
         std::map<Button::Event, std::function<void()>> eventHandlers;
     };
@@ -218,6 +222,9 @@ private:
         std::map<Encoder::Event, std::function<void(int32_t)>> eventHandlers;
         int32_t btn_pin;  // Stored separately for creating button instances
     };
+    
+    // I2C GPIO expander
+    std::shared_ptr<TCA6408A> i2cExpander_;
     
     // Storage for buttons, potentiometers and encoders
     std::map<ButtonId, ButtonInfo> buttons;

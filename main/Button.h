@@ -3,14 +3,14 @@
 #include <functional>
 #include <string>
 #include <memory>
-#include "iot_button.h"
-#include "button_types.h"
-#include "button_gpio.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/timers.h"
+#include "esp_timer.h"
 #include "esp_log.h"
+#include "TCA6408A.h"
 
 /**
- * @brief Button handler for managing ESP32 buttons using ESP-IoT-Solution button component
+ * @brief Button handler for TCA6408A I2C GPIO Expander
  */
 class Button {
 public:
@@ -18,9 +18,7 @@ public:
      * @brief Button event types used in callbacks
      */
     enum class Event {
-        PRESSED,         // Button pressed (single click)
-        DOUBLE_PRESSED,  // Button double clicked
-        LONG_PRESSED,    // Button held for a longer time
+        PRESSED,         // Button pressed
         RELEASED         // Button released
     };
 
@@ -28,11 +26,11 @@ public:
      * @brief Button configuration
      */
     struct Config {
-        std::string name;             // Button name (for identification in logs)
-        int32_t gpio_num;             // GPIO pin number
-        bool active_low;              // true if button is active low (most common)
-        uint16_t long_press_time_ms;  // Time in ms to consider as long press
-        uint16_t short_press_time_ms; // Time in ms to consider as short press
+        std::string name;                         // Button name (for identification in logs)
+        std::shared_ptr<TCA6408A> i2c_expander;   // I2C expander instance
+        uint8_t pin;                              // Pin number on TCA6408A (0-7)
+        bool active_low;                          // true if button is active low (most common)
+        uint16_t debounce_time_ms;                // Debounce time in ms
     };
 
     /**
@@ -52,6 +50,12 @@ public:
     ~Button();
 
     /**
+     * @brief Initialize the button
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t init();
+
+    /**
      * @brief Register callback for button events
      * @param callback Function to call when button events occur
      */
@@ -64,25 +68,23 @@ public:
     bool isPressed();
 
 private:
-    // Button event handler callbacks
-    static void handleSingleClick(void* arg, void* user_data);
-    static void handleDoubleClick(void* arg, void* user_data);
-    static void handleLongPressStart(void* arg, void* user_data);
-    static void handleButtonRelease(void* arg, void* user_data);
+    // Handle I2C pin changes
+    void handlePinChange(uint8_t pin, uint8_t level);
 
-    // Instance methods that handle events for this button
-    void onSingleClick();
-    void onDoubleClick();
-    void onLongPressStart();
-    void onButtonRelease();
+    // Process button state
+    void processButtonState(bool pressed);
 
-    // Button handle
-    button_handle_t button_handle_;
+    // FreeRTOS timer for debounce
+    TimerHandle_t debounceTimer_ = nullptr;
+    static void onDebounceTimerExpired(TimerHandle_t timer);
+
+    // Button state tracking
+    bool isPressed_ = false;
     
     // User callback
     Callback callback_;
 
-    // Button name and configuration
+    // Button configuration
     Config config_;
     
     // Logger tag

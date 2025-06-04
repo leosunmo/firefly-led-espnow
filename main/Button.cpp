@@ -1,79 +1,73 @@
 #include "Button.h"
-#include "button_gpio.h"
 #include "esp_log.h"
-#include <map>
-
-// Map to track button instances by their handle
-static std::map<button_handle_t, Button*> button_instances;
-
+#include <functional>
 
 Button::Button(const Config& config) :
-    button_handle_(nullptr), // Initialize button handle to null
-    callback_(nullptr), // Initialize callback to null
-    config_(config){
+    callback_(nullptr),
+    config_(config) {
 
-    sniprintf(tag_, sizeof(tag_), "Button_%s", config.name.c_str());
-       
-    ESP_LOGI(tag_, "Initializing button on GPIO %ld", config.gpio_num);
+    snprintf(tag_, sizeof(tag_), "Button_%s", config.name.c_str());
+    ESP_LOGI(tag_, "Creating button on TCA6408A pin %d", config.pin);
+}
 
-    // Configure the button
-    button_config_t button_config = {
-        .long_press_time = config.long_press_time_ms,
-        .short_press_time = config.short_press_time_ms,
-    };
-
-    // Configure button GPIO config
-    button_gpio_config_t gpio_config = {
-        .gpio_num = config.gpio_num,
-        .active_level = (uint8_t)(config.active_low ? 0 : 1), // Active low if true, otherwise high
-        .enable_power_save = false, // Set default value to avoid missing initializer
-        .disable_pull = false // Set default value to avoid missing initializer
-    };
-
-    // Create the GPIO button
-    esp_err_t ret = iot_button_new_gpio_device(&button_config, &gpio_config, &button_handle_);
-    if (ret != ESP_OK || button_handle_ == nullptr) {
-        ESP_LOGE(tag_, "Failed to create button");
+esp_err_t Button::init() {
+    if (config_.i2c_expander == nullptr) {
+        ESP_LOGE(tag_, "TCA6408A instance is not initialized");
+        return ESP_ERR_INVALID_STATE;
     }
 
-    // Add this button to the instances map
-    button_instances[button_handle_] = this;
-
-    // Register button callbacks
-    ret = iot_button_register_cb(button_handle_, BUTTON_SINGLE_CLICK, NULL, handleSingleClick, button_handle_);
+    // Configure pin as input
+    esp_err_t ret = config_.i2c_expander->configurePin(config_.pin, false);
     if (ret != ESP_OK) {
-        ESP_LOGE(tag_, "Failed to register single click: %s", esp_err_to_name(ret));
+        ESP_LOGE(tag_, "Failed to configure pin %d as input: %s", 
+                config_.pin, esp_err_to_name(ret));
+        return ret;
     }
 
-    ret = iot_button_register_cb(button_handle_, BUTTON_DOUBLE_CLICK, NULL, handleDoubleClick, button_handle_);
-    if (ret != ESP_OK) {
-        ESP_LOGE(tag_, "Failed to register double click: %s", esp_err_to_name(ret));
+    // Create debounce timer
+    debounceTimer_ = xTimerCreate(
+        tag_,                              // Timer name
+        pdMS_TO_TICKS(config_.debounce_time_ms), // Timer period
+        pdFALSE,                           // Auto-reload
+        this,                              // Timer ID is the button instance
+        onDebounceTimerExpired             // Callback
+    );
+    
+    if (debounceTimer_ == nullptr) {
+        ESP_LOGE(tag_, "Failed to create debounce timer");
+        return ESP_ERR_NO_MEM;
     }
 
-    // Register long press callback with specific time threshold
-    button_event_args_t long_press_args = {0};
-    long_press_args.long_press.press_time = config.long_press_time_ms;
-    ret = iot_button_register_cb(button_handle_, BUTTON_LONG_PRESS_START, &long_press_args, handleLongPressStart, button_handle_);
+    // Register pin change callback
+    using namespace std::placeholders;
+    ret = config_.i2c_expander->registerCallback(
+        config_.pin,
+        std::bind(&Button::handlePinChange, this, _1, _2),
+        config_.active_low
+    );
+    
     if (ret != ESP_OK) {
-        ESP_LOGE(tag_, "Failed to register long press: %s", esp_err_to_name(ret));
+        ESP_LOGE(tag_, "Failed to register pin change callback: %s", 
+                esp_err_to_name(ret));
+        return ret;
     }
 
-    // Register release callback
-    ret = iot_button_register_cb(button_handle_, BUTTON_PRESS_UP, NULL, handleButtonRelease, button_handle_);
+    // Start monitoring
+    ret = config_.i2c_expander->startMonitoring();
     if (ret != ESP_OK) {
-        ESP_LOGE(tag_, "Failed to register release: %s", esp_err_to_name(ret));
+        ESP_LOGE(tag_, "Failed to start monitoring: %s", 
+                esp_err_to_name(ret));
+        return ret;
     }
 
     ESP_LOGI(tag_, "Button initialized successfully");
+    return ESP_OK;
 }
 
 Button::~Button() {
-    if (button_handle_ != nullptr) {
-        // Remove from the instances map
-        button_instances.erase(button_handle_);
-        // Delete the button
-        iot_button_delete(button_handle_);
-        button_handle_ = nullptr;
+    if (debounceTimer_ != nullptr) {
+        xTimerDelete(debounceTimer_, portMAX_DELAY);
+        debounceTimer_ = nullptr;
     }
 }
 
@@ -82,67 +76,57 @@ void Button::registerCallback(Callback callback) {
 }
 
 bool Button::isPressed() {
-    if (button_handle_ == nullptr) {
+    if (config_.i2c_expander == nullptr) {
         return false;
     }
-
-    return iot_button_get_key_level(button_handle_) == 1;
+    
+    uint8_t level;
+    esp_err_t ret = config_.i2c_expander->readPin(config_.pin, &level);
+    if (ret != ESP_OK) {
+        ESP_LOGE(tag_, "Failed to read pin state: %s", esp_err_to_name(ret));
+        return false;
+    }
+    
+    // Convert to pressed state based on active_low setting
+    return (config_.active_low) ? (level == 0) : (level == 1);
 }
 
-// Static handlers that dispatch to the correct button instance
-void Button::handleSingleClick(void* arg, void* user_data) {
-    button_handle_t handle = static_cast<button_handle_t>(user_data);
-    if (button_instances.count(handle) > 0) {
-        button_instances[handle]->onSingleClick();
+void Button::handlePinChange(uint8_t pin, uint8_t level) {
+    // Level is already adjusted for active_low in TCA6408A
+    bool pressed = level == 1;
+    
+    // Start the debounce timer
+    if (debounceTimer_ != nullptr) {
+        xTimerStop(debounceTimer_, 0);
+        xTimerStart(debounceTimer_, 0);
+    }
+    
+    // Process state change
+    processButtonState(pressed);
+}
+
+void Button::processButtonState(bool pressed) {
+    if (pressed && !isPressed_) {
+        // Button was just pressed
+        isPressed_ = true;
+        
+        if (callback_) {
+            callback_(Event::PRESSED);
+            ESP_LOGI(tag_, "Button pressed");
+        }
+    }
+    else if (!pressed && isPressed_) {
+        // Button was just released
+        isPressed_ = false;
+        
+        if (callback_) {
+            callback_(Event::RELEASED);
+            ESP_LOGI(tag_, "Button released");
+        }
     }
 }
 
-void Button::handleDoubleClick(void* arg, void* user_data) {
-    button_handle_t handle = static_cast<button_handle_t>(user_data);
-    if (button_instances.count(handle) > 0) {
-        button_instances[handle]->onDoubleClick();
-    }
-}
-
-void Button::handleLongPressStart(void* arg, void* user_data) {
-    button_handle_t handle = static_cast<button_handle_t>(user_data);
-    if (button_instances.count(handle) > 0) {
-        button_instances[handle]->onLongPressStart();
-    }
-}
-
-void Button::handleButtonRelease(void* arg, void* user_data) {
-    button_handle_t handle = static_cast<button_handle_t>(user_data);
-    if (button_instances.count(handle) > 0) {
-        button_instances[handle]->onButtonRelease();
-    }
-}
-
-// Instance methods for handling events
-void Button::onSingleClick() {
-    ESP_LOGI(tag_, "Button single click detected");
-    if (callback_) {
-        callback_(Event::PRESSED);
-    }
-}
-
-void Button::onDoubleClick() {
-    ESP_LOGI(tag_, "Button double click detected");
-    if (callback_) {
-        callback_(Event::DOUBLE_PRESSED);
-    }
-}
-
-void Button::onLongPressStart() {
-    ESP_LOGI(tag_, "Button long press detected");
-    if (callback_) {
-        callback_(Event::LONG_PRESSED);
-    }
-}
-
-void Button::onButtonRelease() {
-    ESP_LOGI(tag_, "Button released");
-    if (callback_) {
-        callback_(Event::RELEASED);
-    }
+void Button::onDebounceTimerExpired(TimerHandle_t timer) {
+    // This function is now only used for debouncing
+    // No additional action needed when timer expires
 }
