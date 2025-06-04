@@ -1,3 +1,3 @@
 # filepath: /home/leo/workspace/firefly-led-espnow/main/CMakeLists.txt
-idf_component_register(SRCS "main.cpp" "Manager.cpp" "Sender.cpp" "SenderInputHandlers.cpp" "Receiver.cpp" "Button.cpp" "InputManager.cpp" "Potentiometer.cpp" "Encoder.cpp" "UARTManager.cpp"
+idf_component_register(SRCS "TCA6408A.cpp" "TCA6408A_interrupt.cpp" "TCA6408A_process.cpp" "main.cpp" "Manager.cpp" "Sender.cpp" "SenderInputHandlers.cpp" "Receiver.cpp" "Button.cpp" "InputManager.cpp" "Potentiometer.cpp" "Encoder.cpp" "UARTManager.cpp"
                     INCLUDE_DIRS ".")
