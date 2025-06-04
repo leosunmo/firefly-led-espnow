@@ -105,8 +105,8 @@ void Sender::setupInputHandlers() {
         });
     
     // Button press activates special effect
-    inputManager.registerEncoderHandler(EncoderId::PATTERN_ENCODER, Encoder::Event::BUTTON_PRESSED,
-        [this](int32_t position) {
+    inputManager.registerButtonHandler(ButtonId::PATTERN_ENCODER_BUTTON, Button::Event::PRESSED,
+        [this]() {
             ESP_LOGI(TAG, "Pattern encoder button: Activating effect punch");
             sendEffectPunch(100); // Full intensity effect
         });
