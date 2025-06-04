@@ -20,6 +20,8 @@ enum class InputDeviceType {
 enum class ButtonId {
     BLUE_BUTTON,
     RED_BUTTON,
+    COLOR_ENCODER_BUTTON,
+    PATTERN_ENCODER_BUTTON,
     // Add new buttons here
 };
 
@@ -214,6 +216,7 @@ private:
         std::unique_ptr<Encoder> encoder;
         std::function<void(Encoder::Event, int32_t)> generalHandler;
         std::map<Encoder::Event, std::function<void(int32_t)>> eventHandlers;
+        int32_t btn_pin;  // Stored separately for creating button instances
     };
     
     // Storage for buttons, potentiometers and encoders

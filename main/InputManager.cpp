@@ -1,4 +1,5 @@
 #include "InputManager.h"
+#include "Button.h"
 #include "config.h"
 #include "Encoder.h"
 #include "esp_log.h"
@@ -111,40 +112,13 @@ esp_err_t InputManager::init() {
     ESP_LOGI(TAG, "Initialized potentiometer '%s' on GPIO %d", 
              brightnessPot.name.c_str(), brightnessPot.gpio_num);
     
-    // Initialize the speed potentiometer (optional) - uncomment this section if needed
-    /*
-    auto& speedPot = potentiometers[PotentiometerId::SPEED_POT];
-    
-    // Now we can directly use speedPot as a Potentiometer::Config
-    speedPot.pot = std::make_unique<Potentiometer>(speedPot);
-    
-    if (!speedPot.pot->init()) {
-        ESP_LOGE(TAG, "Failed to initialize speed potentiometer");
-        // Continue anyway as brightness pot is more important
-    } else {
-        // Register callback for speed potentiometer
-        speedPot.pot->registerCallback([this](Potentiometer::Event event, uint32_t value, float percentage) {
-            this->handlePotEvent(PotentiometerId::SPEED_POT, event, value, percentage);
-        });
-        
-        // Start monitoring speed potentiometer values
-        speedPot.pot->start();
-        
-        ESP_LOGI(TAG, "Initialized potentiometer '%s' on GPIO %d", 
-                speedPot.name.c_str(), speedPot.gpio_num);
-    }
-    */
     
     // Initialize encoders
     EncoderInfo colorEncoderInfo;
     colorEncoderInfo.name = "ColorEncoder";
     colorEncoderInfo.a_pin = ENCODER_COLOR_A_PIN;
     colorEncoderInfo.b_pin = ENCODER_COLOR_B_PIN;
-    colorEncoderInfo.btn_pin = ENCODER_COLOR_BTN_PIN;
-    colorEncoderInfo.has_button = true;
-    colorEncoderInfo.active_low = true;
-    colorEncoderInfo.debounce_time_ms = ENCODER_DEBOUNCE_TIME_MS;
-    colorEncoderInfo.long_press_time_ms = ENCODER_LONG_PRESS_MS;
+    colorEncoderInfo.btn_pin = ENCODER_COLOR_BTN_PIN;  // Save button pin for button creation
     colorEncoderInfo.poll_interval_ms = ENCODER_POLL_INTERVAL_MS;
     colorEncoderInfo.encoder = nullptr;
     colorEncoderInfo.generalHandler = nullptr;
@@ -153,11 +127,7 @@ esp_err_t InputManager::init() {
     patternEncoderInfo.name = "PatternEncoder";
     patternEncoderInfo.a_pin = ENCODER_PATTERN_A_PIN;
     patternEncoderInfo.b_pin = ENCODER_PATTERN_B_PIN;
-    patternEncoderInfo.btn_pin = ENCODER_PATTERN_BTN_PIN;
-    patternEncoderInfo.has_button = true;
-    patternEncoderInfo.active_low = true;
-    patternEncoderInfo.debounce_time_ms = ENCODER_DEBOUNCE_TIME_MS;
-    patternEncoderInfo.long_press_time_ms = ENCODER_LONG_PRESS_MS;
+    patternEncoderInfo.btn_pin = ENCODER_PATTERN_BTN_PIN;  // Save button pin for button creation
     patternEncoderInfo.poll_interval_ms = ENCODER_POLL_INTERVAL_MS;
     patternEncoderInfo.encoder = nullptr;
     patternEncoderInfo.generalHandler = nullptr;
@@ -166,13 +136,62 @@ esp_err_t InputManager::init() {
     encoders[EncoderId::COLOR_ENCODER] = std::move(colorEncoderInfo);
     encoders[EncoderId::PATTERN_ENCODER] = std::move(patternEncoderInfo);
     
-    // Create and initialize encoders (commented out until hardware is available)
-    /* 
-    // Initialize color encoder
+    // Create encoder button configuration
+    ButtonInfo colorEncoderButtonInfo;
+    colorEncoderButtonInfo.name = "ColorEncoderButton";
+    colorEncoderButtonInfo.gpio_num = ENCODER_COLOR_BTN_PIN;
+    colorEncoderButtonInfo.active_low = true;
+    colorEncoderButtonInfo.long_press_time_ms = ENCODER_LONG_PRESS_MS;
+    colorEncoderButtonInfo.short_press_time_ms = ENCODER_DEBOUNCE_TIME_MS;
+    colorEncoderButtonInfo.button = nullptr;
+    colorEncoderButtonInfo.generalHandler = nullptr;
+    
+    ButtonInfo patternEncoderButtonInfo;
+    patternEncoderButtonInfo.name = "PatternEncoderButton";
+    patternEncoderButtonInfo.gpio_num = ENCODER_PATTERN_BTN_PIN;
+    patternEncoderButtonInfo.active_low = true;
+    patternEncoderButtonInfo.long_press_time_ms = ENCODER_LONG_PRESS_MS;
+    patternEncoderButtonInfo.short_press_time_ms = ENCODER_DEBOUNCE_TIME_MS;
+    patternEncoderButtonInfo.button = nullptr;
+    patternEncoderButtonInfo.generalHandler = nullptr;
+    
+    // Add encoder buttons to the buttons map
+    buttons[ButtonId::COLOR_ENCODER_BUTTON] = std::move(colorEncoderButtonInfo);
+    buttons[ButtonId::PATTERN_ENCODER_BUTTON] = std::move(patternEncoderButtonInfo);
+    
+    // Create and initialize the encoder buttons
+    auto& colorEncoderButton = buttons[ButtonId::COLOR_ENCODER_BUTTON];
+    colorEncoderButton.button = std::make_unique<Button>(colorEncoderButton);
+    
+    // Register callback for this button
+    colorEncoderButton.button->registerCallback([this, buttonId = ButtonId::COLOR_ENCODER_BUTTON](Button::Event event) {
+        this->handleButtonEvent(buttonId, event);
+    });
+    ESP_LOGI(TAG, "Initialized encoder button '%s' on GPIO %ld", 
+            colorEncoderButton.name.c_str(), colorEncoderButton.gpio_num);
+    
+    auto& patternEncoderButton = buttons[ButtonId::PATTERN_ENCODER_BUTTON];
+    patternEncoderButton.button = std::make_unique<Button>(patternEncoderButton);
+    
+    // Register callback for this button
+    patternEncoderButton.button->registerCallback([this, buttonId = ButtonId::PATTERN_ENCODER_BUTTON](Button::Event event) {
+        this->handleButtonEvent(buttonId, event);
+    });
+    ESP_LOGI(TAG, "Initialized encoder button '%s' on GPIO %ld", 
+            patternEncoderButton.name.c_str(), patternEncoderButton.gpio_num);
+    
+    // Create and initialize encoders
     auto& colorEncoder = encoders[EncoderId::COLOR_ENCODER];
     
-    // We can directly use colorEncoder as an Encoder::Config
-    colorEncoder.encoder = std::make_unique<Encoder>(colorEncoder);
+    // Create a properly configured Encoder::Config
+    Encoder::Config colorEncoderConfig;
+    colorEncoderConfig.name = colorEncoder.name;
+    colorEncoderConfig.a_pin = colorEncoder.a_pin;
+    colorEncoderConfig.b_pin = colorEncoder.b_pin;
+    colorEncoderConfig.poll_interval_ms = colorEncoder.poll_interval_ms;
+    
+    // Create the encoder
+    colorEncoder.encoder = std::make_unique<Encoder>(colorEncoderConfig);
     
     if (colorEncoder.encoder->init()) {
         // Register callback for encoder
@@ -183,8 +202,8 @@ esp_err_t InputManager::init() {
         // Start monitoring encoder
         colorEncoder.encoder->start();
         
-        ESP_LOGI(TAG, "Initialized encoder '%s' on GPIO A:%ld B:%ld BTN:%ld", 
-                 colorEncoder.name.c_str(), colorEncoder.a_pin, colorEncoder.b_pin, colorEncoder.btn_pin);
+        ESP_LOGI(TAG, "Initialized encoder '%s' on GPIO A:%ld B:%ld", 
+                 colorEncoder.name.c_str(), colorEncoder.a_pin, colorEncoder.b_pin);
     } else {
         ESP_LOGE(TAG, "Failed to initialize color encoder");
     }
@@ -192,8 +211,15 @@ esp_err_t InputManager::init() {
     // Initialize pattern encoder
     auto& patternEncoder = encoders[EncoderId::PATTERN_ENCODER];
     
-    // We can directly use patternEncoder as an Encoder::Config
-    patternEncoder.encoder = std::make_unique<Encoder>(patternEncoder);
+    // Create a properly configured Encoder::Config
+    Encoder::Config patternEncoderConfig;
+    patternEncoderConfig.name = patternEncoder.name;
+    patternEncoderConfig.a_pin = patternEncoder.a_pin;
+    patternEncoderConfig.b_pin = patternEncoder.b_pin;
+    patternEncoderConfig.poll_interval_ms = patternEncoder.poll_interval_ms;
+    
+    // Create the encoder
+    patternEncoder.encoder = std::make_unique<Encoder>(patternEncoderConfig);
     
     if (patternEncoder.encoder->init()) {
         // Register callback for encoder
@@ -204,12 +230,11 @@ esp_err_t InputManager::init() {
         // Start monitoring encoder
         patternEncoder.encoder->start();
         
-        ESP_LOGI(TAG, "Initialized encoder '%s' on GPIO A:%ld B:%ld BTN:%ld", 
-                 patternEncoder.name.c_str(), patternEncoder.a_pin, patternEncoder.b_pin, patternEncoder.btn_pin);
+        ESP_LOGI(TAG, "Initialized encoder '%s' on GPIO A:%ld B:%ld", 
+                 patternEncoder.name.c_str(), patternEncoder.a_pin, patternEncoder.b_pin);
     } else {
         ESP_LOGE(TAG, "Failed to initialize pattern encoder");
     }
-    */
     
     ESP_LOGI(TAG, "InputManager initialized successfully");
     return ESP_OK;
@@ -393,6 +418,10 @@ const char* InputManager::buttonIdToString(ButtonId id) {
             return "BLUE_BUTTON";
         case ButtonId::RED_BUTTON:
             return "RED_BUTTON";
+        case ButtonId::COLOR_ENCODER_BUTTON:
+            return "COLOR_ENCODER_BUTTON";
+        case ButtonId::PATTERN_ENCODER_BUTTON:
+            return "PATTERN_ENCODER_BUTTON";
         default:
             return "UNKNOWN";
     }
@@ -474,11 +503,26 @@ void InputManager::resetEncoderPosition(EncoderId encoderId) {
 }
 
 bool InputManager::isEncoderButtonPressed(EncoderId encoderId) {
-    auto* encoder = getEncoder(encoderId);
-    if (!encoder) {
+    ButtonId buttonId;
+    
+    // Map encoder ID to corresponding button ID
+    switch (encoderId) {
+        case EncoderId::COLOR_ENCODER:
+            buttonId = ButtonId::COLOR_ENCODER_BUTTON;
+            break;
+        case EncoderId::PATTERN_ENCODER:
+            buttonId = ButtonId::PATTERN_ENCODER_BUTTON;
+            break;
+        default:
+            ESP_LOGE(TAG, "Unknown encoder ID %s", encoderIdToString(encoderId));
+            return false;
+    }
+    
+    auto* button = getButton(buttonId);
+    if (!button) {
         return false;
     }
-    return encoder->isButtonPressed();
+    return button->isPressed();
 }
 
 void InputManager::handleEncoderEvent(EncoderId encoderId, Encoder::Event event, int32_t position) {
@@ -488,7 +532,7 @@ void InputManager::handleEncoderEvent(EncoderId encoderId, Encoder::Event event,
     }
     
     const char* eventNames[] = {
-        "CLOCKWISE", "COUNTER_CLOCKWISE", "BUTTON_PRESSED", "BUTTON_RELEASED", "BUTTON_LONG_PRESSED"
+        "CLOCKWISE", "COUNTER_CLOCKWISE"
     };
     
     ESP_LOGI(TAG, "Encoder event: %s - %s, Position: %ld", 

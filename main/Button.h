@@ -52,12 +52,6 @@ public:
     ~Button();
 
     /**
-     * @brief Initialize the button
-     * @return true if initialization was successful
-     */
-    bool init();
-
-    /**
      * @brief Register callback for button events
      * @param callback Function to call when button events occur
      */
