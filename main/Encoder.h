@@ -109,6 +109,9 @@ private:
     // Private methods
     static bool pcntEventCallback(pcnt_unit_handle_t unit, const pcnt_watch_event_data_t *edata, void *user_ctx);
     static void taskFunction(void* arg);
+    
+    // Helper to calculate elapsed time between two timestamps with overflow handling
+    static TickType_t calcElapsedTime(TickType_t start, TickType_t end);
 
     // Instance variables
     Config config_;
@@ -117,9 +120,8 @@ private:
     bool running_;
     // Event handling
     Event last_event_;
-    TickType_t last_event_time_;      // Timestamp of the last event (for debouncing in ISR)
-    TickType_t last_processed_time_;  // Timestamp of the last processed event (in task context)
-    uint32_t debounced_count_;        // Counter for debounced events (for debugging)
+    TickType_t last_event_time_;     // Timestamp of the last event (for debouncing)
+    uint32_t debounced_count_;       // Counter for debounced events (for debugging)
     
     // PCNT handles
     pcnt_unit_handle_t pcnt_unit_;

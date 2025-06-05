@@ -27,7 +27,6 @@ Encoder::Encoder(const Config& config)
       running_(false),
       last_event_(Event::CLOCKWISE),
       last_event_time_(0),       // Will be properly initialized in start()
-      last_processed_time_(0),   // Will be properly initialized in start()
       debounced_count_(0),       // Initialize debounce counter
       pcnt_unit_(nullptr),
       pcnt_chan_a_(nullptr),
@@ -234,10 +233,8 @@ void Encoder::start() {
     // Create task to process events
     running_ = true;
     
-    // Initialize both timestamps to current time to ensure proper timing from the start
-    TickType_t current_time = xTaskGetTickCount();
-    last_event_time_ = current_time;
-    last_processed_time_ = current_time;
+    // Initialize timestamp to current time to ensure proper debouncing from the start
+    last_event_time_ = xTaskGetTickCount();
     
     ESP_LOGI(tag_, "Encoder monitoring started, using callbacks with %lu ms debounce", config_.debounce_ms);
     
@@ -310,33 +307,15 @@ bool Encoder::processEvents() {
     // Get the current event that triggered the notification
     Event event = last_event_;
     
-    // Get current time for measurements
+    // Calculate time since last ISR event for logging
     TickType_t current_time = xTaskGetTickCount();
-    
-    // Calculate time since last ISR event (for ISR debounce verification)
-    TickType_t elapsed_from_isr;
-    if (current_time >= last_event_time_) {
-        elapsed_from_isr = current_time - last_event_time_;
-    } else {
-        elapsed_from_isr = (portMAX_DELAY - last_event_time_) + current_time;
-    }
-    
-    // Calculate time since last processed event (for user perception)
-    TickType_t elapsed_from_last_processed;
-    if (current_time >= last_processed_time_) {
-        elapsed_from_last_processed = current_time - last_processed_time_;
-    } else {
-        elapsed_from_last_processed = (portMAX_DELAY - last_processed_time_) + current_time;
-    }
-    
-    // Update the last processed time to current time
-    last_processed_time_ = current_time;
+    TickType_t elapsed_time = calcElapsedTime(last_event_time_, current_time);
     
     // Log the event (safe to do here since we're in task context)
     if (config_.debounce_ms > 0) {
-        ESP_LOGI(tag_, "%s rotation detected, position: %ld (time since last: %lu ms)",
+        ESP_LOGI(tag_, "%s rotation detected, position: %ld (debounce: %lu ms)",
                 (event == Event::CLOCKWISE) ? "Clockwise" : "Counter-clockwise", 
-                position_, pdTICKS_TO_MS(elapsed_from_last_processed));
+                position_, pdTICKS_TO_MS(elapsed_time));
     } else {
         ESP_LOGI(tag_, "%s rotation detected, position: %ld",
                 (event == Event::CLOCKWISE) ? "Clockwise" : "Counter-clockwise", 
@@ -374,15 +353,8 @@ bool Encoder::pcntEventCallback(pcnt_unit_handle_t unit, const pcnt_watch_event_
     
     // Check if we should debounce this event
     if (encoder->config_.debounce_ms > 0) {
-        TickType_t elapsed_time;
-        
-        // Handle tick count overflow
-        if (current_time >= encoder->last_event_time_) {
-            elapsed_time = current_time - encoder->last_event_time_;
-        } else {
-            // Handle timer overflow
-            elapsed_time = (portMAX_DELAY - encoder->last_event_time_) + current_time;
-        }
+        // Calculate elapsed time using our helper function
+        TickType_t elapsed_time = calcElapsedTime(encoder->last_event_time_, current_time);
         
         // Calculate threshold in ticks
         TickType_t debounce_ticks = pdMS_TO_TICKS(encoder->config_.debounce_ms);
@@ -391,9 +363,6 @@ bool Encoder::pcntEventCallback(pcnt_unit_handle_t unit, const pcnt_watch_event_
         if (elapsed_time < debounce_ticks) {
             // Debounce in effect, ignore this event
             encoder->debounced_count_++;  // Increment the debounce counter (safe in ISR)
-            
-            // We can't safely use ESP_LOG in ISR context, but we can save info
-            // to display later during the next event processing
             return false;
         }
     }
@@ -432,4 +401,14 @@ bool Encoder::pcntEventCallback(pcnt_unit_handle_t unit, const pcnt_watch_event_
     }
     
     return true;  // Indicate that high priority processing is needed
+}
+
+TickType_t Encoder::calcElapsedTime(TickType_t start, TickType_t end) {
+    // Handle tick count overflow (rare but possible)
+    if (end >= start) {
+        return end - start;
+    } else {
+        // Handle timer overflow by calculating the "wrap-around" distance
+        return (portMAX_DELAY - start) + end + 1;
+    }
 }

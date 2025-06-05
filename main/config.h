@@ -2,7 +2,7 @@
 #define CONFIG_H
 
 // Encoder configuration
-#define ENCODER_DEBOUNCE_MS 100 // Debounce time in milliseconds for encoder buttons
+#define ENCODER_DEBOUNCE_MS 80 // Debounce time in milliseconds for encoder buttons
 
 #define ENCODER_COLOR_A_PIN 20       // Color encoder signal A
 #define ENCODER_COLOR_B_PIN 19       // Color encoder signal B
