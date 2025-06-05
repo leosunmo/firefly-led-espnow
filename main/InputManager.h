@@ -167,13 +167,6 @@ public:
     void resetEncoderPosition(EncoderId encoderId);
     
     /**
-     * @brief Check if the encoder button is currently pressed
-     * @param encoderId The encoder identifier
-     * @return true if button is pressed, false otherwise or if no button or encoder not found
-     */
-    bool isEncoderButtonPressed(EncoderId encoderId);
-    
-    /**
      * @brief Helper for converting enum values to strings (for logging)
      */
     static const char* buttonIdToString(ButtonId id);
@@ -220,7 +213,6 @@ private:
         std::unique_ptr<Encoder> encoder;
         std::function<void(Encoder::Event, int32_t)> generalHandler;
         std::map<Encoder::Event, std::function<void(int32_t)>> eventHandlers;
-        int32_t btn_pin;  // Stored separately for creating button instances
     };
     
     // I2C GPIO expander
