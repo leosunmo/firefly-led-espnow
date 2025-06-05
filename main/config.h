@@ -2,12 +2,14 @@
 #define CONFIG_H
 
 // Encoder configuration
+#define ENCODER_DEBOUNCE_MS 100 // Debounce time in milliseconds for encoder buttons
+
 #define ENCODER_COLOR_A_PIN 20       // Color encoder signal A
 #define ENCODER_COLOR_B_PIN 19       // Color encoder signal B
-#define ENCODER_COLOR_BTN_PIN 10    // Color encoder button (push)
-#define ENCODER_PATTERN_A_PIN 22    // Pattern encoder signal A
-#define ENCODER_PATTERN_B_PIN 21    // Pattern encoder signal B
-#define ENCODER_PATTERN_BTN_PIN 11  // Pattern encoder button (push)
+// #define ENCODER_COLOR_BTN_PIN 10    // Color encoder button (push)
+// #define ENCODER_PATTERN_A_PIN 22    // Pattern encoder signal A
+// #define ENCODER_PATTERN_B_PIN 21    // Pattern encoder signal B
+// #define ENCODER_PATTERN_BTN_PIN 11  // Pattern encoder button (push)
 #define ENCODER_POLL_INTERVAL_MS 10 // Read encoder every 10ms
 #define ENCODER_DEBOUNCE_TIME_MS 20 // Button debounce time
 
