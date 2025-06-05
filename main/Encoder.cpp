@@ -1,10 +1,34 @@
 #include "Encoder.h"
 #include <cstring>
 
+// Static task function for processing encoder events
+void Encoder::taskFunction(void* arg) {
+    Encoder* encoder = static_cast<Encoder*>(arg);
+    ESP_LOGI(encoder->tag_, "Encoder event processing task started");
+    
+    while (encoder->running_) {
+        // Wait for notification from the ISR callback with a timeout to allow clean exit
+        uint32_t notification = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(500));
+        
+        if (notification > 0) {
+            // We received a notification - process the event
+            encoder->processEvents();
+        }
+        // No else clause needed - if timeout occurs, we just loop and check running_ again
+    }
+    
+    ESP_LOGI(encoder->tag_, "Encoder event processing task ended");
+    vTaskDelete(NULL);
+}
+
 Encoder::Encoder(const Config& config)
     : config_(config), 
       task_handle_(nullptr),
       running_(false),
+      last_event_(Event::CLOCKWISE),
+      last_event_time_(0),       // Will be properly initialized in start()
+      last_processed_time_(0),   // Will be properly initialized in start()
+      debounced_count_(0),       // Initialize debounce counter
       pcnt_unit_(nullptr),
       pcnt_chan_a_(nullptr),
       pcnt_chan_b_(nullptr),
@@ -41,12 +65,13 @@ Encoder::~Encoder() {
 }
 
 bool Encoder::init() {
+    esp_log_level_set(tag_, ESP_LOG_DEBUG);
     ESP_LOGI(tag_, "Initializing encoder with PCNT");
 
-    // Set up PCNT unit with wider limits to ensure we capture events
+    // Set up PCNT unit with tighter limits for more reliable step detection
     pcnt_unit_config_t unit_config = {
-        .low_limit = -16,  // Set wider limit for reliable triggering
-        .high_limit = 16,  // Set wider limit for reliable triggering
+        .low_limit = -2,  // Tighter limit for more reliable triggering
+        .high_limit = 2,  // Tighter limit for more reliable triggering
     };
     unit_config.flags.accum_count = true;  // Use hardware accumulation
     
@@ -91,7 +116,7 @@ bool Encoder::init() {
     // Set edge and level actions for rotary encoding
     // For channel A (count up when A leads B)
     ret = pcnt_channel_set_edge_action(pcnt_chan_a_, 
-                                      PCNT_CHANNEL_EDGE_ACTION_HOLD,   // No count on negative edge
+                                      PCNT_CHANNEL_EDGE_ACTION_DECREASE,   // No count on negative edge
                                       PCNT_CHANNEL_EDGE_ACTION_INCREASE); // Count up on positive edge
     if (ret != ESP_OK) {
         ESP_LOGE(tag_, "Failed to set edge action for PCNT channel A: %s", esp_err_to_name(ret));
@@ -108,8 +133,8 @@ bool Encoder::init() {
     
     // For channel B (count up when B leads A)
     ret = pcnt_channel_set_edge_action(pcnt_chan_b_, 
-                                      PCNT_CHANNEL_EDGE_ACTION_HOLD,   // No count on negative edge
-                                      PCNT_CHANNEL_EDGE_ACTION_INCREASE); // Count up on positive edge
+                                      PCNT_CHANNEL_EDGE_ACTION_INCREASE,   // No count on negative edge
+                                      PCNT_CHANNEL_EDGE_ACTION_DECREASE); // Count up on positive edge
     if (ret != ESP_OK) {
         ESP_LOGE(tag_, "Failed to set edge action for PCNT channel B: %s", esp_err_to_name(ret));
         return false;
@@ -139,13 +164,13 @@ bool Encoder::init() {
     
     // Add watch points to trigger events when counter reaches certain values
     // Add multiple watch points to ensure we catch rotation events
-    ret = pcnt_unit_add_watch_point(pcnt_unit_, 4);
+    ret = pcnt_unit_add_watch_point(pcnt_unit_, 1);
     if (ret != ESP_OK) {
         ESP_LOGE(tag_, "Failed to add positive watch point: %s", esp_err_to_name(ret));
         return false;
     }
     
-    ret = pcnt_unit_add_watch_point(pcnt_unit_, -4);
+    ret = pcnt_unit_add_watch_point(pcnt_unit_, -1);
     if (ret != ESP_OK) {
         ESP_LOGE(tag_, "Failed to add negative watch point: %s", esp_err_to_name(ret));
         return false;
@@ -164,12 +189,14 @@ bool Encoder::init() {
         // Continue anyway, not critical
     }
     
-    // No button configuration needed
-
     // Initialize position
     position_ = 0;
 
-    ESP_LOGI(tag_, "Encoder initialized successfully with PCNT");
+    // Log the configuration for debugging
+    ESP_LOGI(tag_, "Encoder initialized successfully with PCNT:");
+    ESP_LOGI(tag_, "  - Debounce period: %lu ms (%lu ticks)", config_.debounce_ms, pdMS_TO_TICKS(config_.debounce_ms));
+    ESP_LOGI(tag_, "  - Counter limits: -2/+2");
+    
     return true;
 }
 
@@ -179,7 +206,7 @@ void Encoder::registerCallback(Callback callback) {
 
 void Encoder::start() {
     if (running_) {
-        ESP_LOGW(tag_, "Encoder task already running");
+        ESP_LOGW(tag_, "Encoder already running");
         return;
     }
     
@@ -204,21 +231,28 @@ void Encoder::start() {
         return;
     }
     
-    // Create task for both button monitoring and tracking accumulated encoder position
+    // Create task to process events
     running_ = true;
-    ESP_LOGI(tag_, "Starting encoder monitoring task");
     
+    // Initialize both timestamps to current time to ensure proper timing from the start
+    TickType_t current_time = xTaskGetTickCount();
+    last_event_time_ = current_time;
+    last_processed_time_ = current_time;
+    
+    ESP_LOGI(tag_, "Encoder monitoring started, using callbacks with %lu ms debounce", config_.debounce_ms);
+    
+    // Create a task to process events from the interrupt handler
     BaseType_t task_ret = xTaskCreate(
         taskFunction,
         tag_,
-        2048,         // Stack size
-        this,         // Task parameter
-        tskIDLE_PRIORITY + 1,  // Priority
+        3072,       // Stack size (increased to prevent stack overflow)
+        this,       // Task parameter
+        1,          // Priority
         &task_handle_
     );
     
     if (task_ret != pdPASS) {
-        ESP_LOGE(tag_, "Failed to create encoder monitoring task");
+        ESP_LOGE(tag_, "Failed to create encoder event processing task");
         running_ = false;
         return;
     }
@@ -232,18 +266,19 @@ void Encoder::stop() {
         pcnt_unit_disable(pcnt_unit_);
     }
     
-    // Stop button monitoring task if running
+    // Mark encoder as not running and stop task
     if (running_) {
         running_ = false;
-        ESP_LOGI(tag_, "Stopping button monitoring task");
         
         // Give the task time to exit gracefully
-        vTaskDelay(pdMS_TO_TICKS(100));
-        
         if (task_handle_ != nullptr) {
+            ESP_LOGI(tag_, "Waiting for task to terminate");
+            vTaskDelay(pdMS_TO_TICKS(100));
             vTaskDelete(task_handle_);
             task_handle_ = nullptr;
         }
+        
+        ESP_LOGI(tag_, "Encoder monitoring stopped");
     }
 }
 
@@ -256,102 +291,145 @@ void Encoder::reset() {
 }
 
 int32_t Encoder::getPosition() {
-    if (pcnt_unit_) {
-        int value;
-        if (pcnt_unit_get_count(pcnt_unit_, &value) == ESP_OK) {
-            position_ = value;
-        }
-    }
+    // Simply return the software-tracked position
+    // We don't need to read from the hardware counter as that gets reset
+    // after each event trigger, and our position_ is tracking the full count
     return position_;
 }
 
 void Encoder::setPosition(int32_t position) {
-    if (pcnt_unit_) {
-        pcnt_unit_clear_count(pcnt_unit_);
-        // The PCNT unit doesn't allow directly setting a value,
-        // so we need to track the offset in software
-        position_ = position;
-        ESP_LOGI(tag_, "Encoder position set to %ld", position);
-    }
+    // Set the software position directly
+    position_ = position;
+    ESP_LOGI(tag_, "Encoder position set to %ld", position);
 }
 
-// Button functionality has been removed
-
-void Encoder::taskFunction(void* arg) {
-    Encoder* encoder = static_cast<Encoder*>(arg);
-    encoder->pollTask();
-}
-
-void Encoder::pollTask() {
-    ESP_LOGI(tag_, "Encoder monitoring task started");
+bool Encoder::processEvents() {
+    // Simply process the event that was stored by the ISR
+    // No need to check event_pending_ since we were woken by a notification
     
-    // This task is useful for diagnostics and debugging
-    while (running_) {
-        int hw_count = 0;
-        esp_err_t err = pcnt_unit_get_count(pcnt_unit_, &hw_count);
-        
-        if (err == ESP_OK) {
-            ESP_LOGI(tag_, "Encoder diagnostics: HW count=%d, SW position=%ld", 
-                    hw_count, position_);
-        } else {
-            ESP_LOGW(tag_, "Failed to read encoder count: %s", esp_err_to_name(err));
-        }
-        
-        // Sleep for the polling interval
-        vTaskDelay(pdMS_TO_TICKS(config_.poll_interval_ms));
+    // Get the current event that triggered the notification
+    Event event = last_event_;
+    
+    // Get current time for measurements
+    TickType_t current_time = xTaskGetTickCount();
+    
+    // Calculate time since last ISR event (for ISR debounce verification)
+    TickType_t elapsed_from_isr;
+    if (current_time >= last_event_time_) {
+        elapsed_from_isr = current_time - last_event_time_;
+    } else {
+        elapsed_from_isr = (portMAX_DELAY - last_event_time_) + current_time;
     }
     
-    ESP_LOGI(tag_, "Encoder monitoring task ended");
-    vTaskDelete(nullptr);
+    // Calculate time since last processed event (for user perception)
+    TickType_t elapsed_from_last_processed;
+    if (current_time >= last_processed_time_) {
+        elapsed_from_last_processed = current_time - last_processed_time_;
+    } else {
+        elapsed_from_last_processed = (portMAX_DELAY - last_processed_time_) + current_time;
+    }
+    
+    // Update the last processed time to current time
+    last_processed_time_ = current_time;
+    
+    // Log the event (safe to do here since we're in task context)
+    if (config_.debounce_ms > 0) {
+        ESP_LOGI(tag_, "%s rotation detected, position: %ld (time since last: %lu ms)",
+                (event == Event::CLOCKWISE) ? "Clockwise" : "Counter-clockwise", 
+                position_, pdTICKS_TO_MS(elapsed_from_last_processed));
+    } else {
+        ESP_LOGI(tag_, "%s rotation detected, position: %ld",
+                (event == Event::CLOCKWISE) ? "Clockwise" : "Counter-clockwise", 
+                position_);
+    }
+    
+    // Call user callback if registered
+    if (callback_) {
+        callback_(event, position_);
+    }
+    
+    // Log debounced events periodically (after every event, if there are debounced events)
+    if (debounced_count_ > 0) {
+        ESP_LOGI(tag_, "Debouncing stats: %lu events filtered out so far", (unsigned long)debounced_count_);
+    }
+    
+    return true;
 }
 
 bool Encoder::pcntEventCallback(pcnt_unit_handle_t unit, const pcnt_watch_event_data_t *edata, void *user_ctx) {
+    // This function runs in an interrupt context - keep it minimal!
     Encoder* encoder = static_cast<Encoder*>(user_ctx);
     
     if (!encoder || !edata) {
-        ESP_LOGE("Encoder", "Invalid callback parameters");
         return false;
     }
     
-    // Get current count value
-    int current_count = 0;
-    esp_err_t err = pcnt_unit_get_count(unit, &current_count);
-    if (err != ESP_OK) {
-        ESP_LOGE(encoder->tag_, "Failed to get count: %s", esp_err_to_name(err));
+    // Skip processing if not running (safer)
+    if (!encoder->running_) {
         return false;
     }
     
-    // Log the event
-    ESP_LOGI(encoder->tag_, "Watch event triggered: watch_point=%d, current_count=%d", 
-             edata->watch_point_value, current_count);
+    // Get current time for debounce check
+    TickType_t current_time = xTaskGetTickCountFromISR();
     
-    // Determine direction from the watch point value and current count
+    // Check if we should debounce this event
+    if (encoder->config_.debounce_ms > 0) {
+        TickType_t elapsed_time;
+        
+        // Handle tick count overflow
+        if (current_time >= encoder->last_event_time_) {
+            elapsed_time = current_time - encoder->last_event_time_;
+        } else {
+            // Handle timer overflow
+            elapsed_time = (portMAX_DELAY - encoder->last_event_time_) + current_time;
+        }
+        
+        // Calculate threshold in ticks
+        TickType_t debounce_ticks = pdMS_TO_TICKS(encoder->config_.debounce_ms);
+        
+        // Skip this event if it occurred too soon after the last one
+        if (elapsed_time < debounce_ticks) {
+            // Debounce in effect, ignore this event
+            encoder->debounced_count_++;  // Increment the debounce counter (safe in ISR)
+            
+            // We can't safely use ESP_LOG in ISR context, but we can save info
+            // to display later during the next event processing
+            return false;
+        }
+    }
+    
+    // IMPORTANT: Update the last event time FIRST, to ensure accurate debouncing
+    // The timestamp must be updated before any event processing
+    encoder->last_event_time_ = current_time;
+
+    // Determine direction from the watch point value (positive = clockwise)
     const int watch_value = edata->watch_point_value;
     bool clockwise = (watch_value > 0);
     
     // Update position based on direction
     if (clockwise) {
         encoder->position_++;
-        ESP_LOGI(encoder->tag_, "Clockwise rotation detected, new position: %ld", encoder->position_);
     } else {
         encoder->position_--;
-        ESP_LOGI(encoder->tag_, "Counter-clockwise rotation detected, new position: %ld", encoder->position_);
     }
     
-    // Reset the count to halfway between limits to avoid missing events
-    if (current_count >= watch_value || current_count <= watch_value) {
-        pcnt_unit_clear_count(unit);
-        ESP_LOGD(encoder->tag_, "Counter cleared");
-    }
+    // Reset the count to avoid missing events
+    pcnt_unit_clear_count(unit);
     
-    // Call user callback if registered
-    if (encoder->callback_) {
-        if (clockwise) {
-            encoder->callback_(Event::CLOCKWISE, encoder->position_);
-        } else {
-            encoder->callback_(Event::COUNTER_CLOCKWISE, encoder->position_);
+    // Store the event for later processing
+    encoder->last_event_ = clockwise ? Event::CLOCKWISE : Event::COUNTER_CLOCKWISE;
+    
+    // Notify the task that an event has occurred
+    if (encoder->task_handle_ != nullptr) {
+        // Send task notification from ISR - limit how often we notify to prevent overflows
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        vTaskNotifyGiveFromISR(encoder->task_handle_, &xHigherPriorityTaskWoken);
+        
+        // If a higher priority task was woken, request a context switch
+        if (xHigherPriorityTaskWoken == pdTRUE) {
+            portYIELD_FROM_ISR();
         }
     }
     
-    return false;  // No high-priority task wakeup needed
+    return true;  // Indicate that high priority processing is needed
 }
