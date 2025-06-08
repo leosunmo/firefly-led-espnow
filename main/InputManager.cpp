@@ -1,5 +1,5 @@
 #include "InputManager.h"
-#include "Button.h"
+#include "I2CButton.h"
 #include "TCA6408A.h"
 #include "config.h"
 #include "Encoder.h"

@@ -5,7 +5,7 @@
 #include <functional>
 #include <string>
 #include "esp_err.h"
-#include "Button.h"
+#include "I2CButton.h"
 #include "Potentiometer.h"
 #include "Encoder.h"
 
