@@ -48,9 +48,9 @@ void Sender::setupInputHandlers() {
     */
     
     // ====================
-    // Encoder handler examples (commented out until hardware is available)
+    // Encoder handlers
     // ====================
-    /*
+
     // Color encoder for hue adjustment
     static uint16_t encoderHue = 180; // Start at cyan
     
@@ -82,7 +82,6 @@ void Sender::setupInputHandlers() {
         PatternType::GreenPattern,
         PatternType::RainbowPattern,
         PatternType::FirePattern,
-        PatternType::StarfieldPattern
     };
     static const int patternCount = sizeof(patterns) / sizeof(patterns[0]);
     static int patternIndex = 0;
@@ -110,5 +109,4 @@ void Sender::setupInputHandlers() {
             ESP_LOGI(TAG, "Pattern encoder button: Activating effect punch");
             sendEffectPunch(100); // Full intensity effect
         });
-    */
 }

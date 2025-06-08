@@ -151,128 +151,53 @@ esp_err_t InputManager::init()
     ESP_LOGI(TAG, "Initialized potentiometer '%s' on GPIO %d",
              brightnessPot.name.c_str(), brightnessPot.gpio_num);
 
-    // // Initialize encoders
-    // EncoderInfo colorEncoderInfo;
-    // colorEncoderInfo.name = "ColorEncoder";
-    // colorEncoderInfo.a_pin = ENCODER_COLOR_A_PIN;
-    // colorEncoderInfo.b_pin = ENCODER_COLOR_B_PIN;
-    // colorEncoderInfo.btn_pin = ENCODER_COLOR_BTN_PIN;  // Save button pin for button creation
-    // colorEncoderInfo.poll_interval_ms = ENCODER_POLL_INTERVAL_MS;
-    // colorEncoderInfo.encoder = nullptr;
-    // colorEncoderInfo.generalHandler = nullptr;
+    // Initialize encoders
+    EncoderInfo colorEncoderInfo;
+    colorEncoderInfo.name = "ColorEncoder";
+    colorEncoderInfo.a_pin = ENCODER_COLOR_A_PIN;
+    colorEncoderInfo.b_pin = ENCODER_COLOR_B_PIN;
+    colorEncoderInfo.encoder = nullptr;
+    colorEncoderInfo.generalHandler = nullptr;
 
     // EncoderInfo patternEncoderInfo;
     // patternEncoderInfo.name = "PatternEncoder";
     // patternEncoderInfo.a_pin = ENCODER_PATTERN_A_PIN;
     // patternEncoderInfo.b_pin = ENCODER_PATTERN_B_PIN;
-    // patternEncoderInfo.btn_pin = ENCODER_PATTERN_BTN_PIN;  // Save button pin for button creation
     // patternEncoderInfo.poll_interval_ms = ENCODER_POLL_INTERVAL_MS;
     // patternEncoderInfo.encoder = nullptr;
     // patternEncoderInfo.generalHandler = nullptr;
 
-    // // Add encoders to map
-    // encoders[EncoderId::COLOR_ENCODER] = std::move(colorEncoderInfo);
+    // Add encoders to map
+    encoders[EncoderId::COLOR_ENCODER] = std::move(colorEncoderInfo);
     // encoders[EncoderId::PATTERN_ENCODER] = std::move(patternEncoderInfo);
 
-    // // Create encoder button configuration
-    // ButtonInfo colorEncoderButtonInfo;
-    // colorEncoderButtonInfo.name = "ColorEncoderButton";
-    // colorEncoderButtonInfo.pin = 2;  // TCA6408A pin 2 for color encoder button
-    // colorEncoderButtonInfo.active_low = true;
-    // colorEncoderButtonInfo.debounce_time_ms = ENCODER_DEBOUNCE_TIME_MS;
-    // colorEncoderButtonInfo.button = nullptr;
-    // colorEncoderButtonInfo.generalHandler = nullptr;
+    // Create and initialize encoders
+    auto& colorEncoder = encoders[EncoderId::COLOR_ENCODER];
 
-    // ButtonInfo patternEncoderButtonInfo;
-    // patternEncoderButtonInfo.name = "PatternEncoderButton";
-    // patternEncoderButtonInfo.pin = 3;  // TCA6408A pin 3 for pattern encoder button
-    // patternEncoderButtonInfo.active_low = true;
-    // patternEncoderButtonInfo.debounce_time_ms = ENCODER_DEBOUNCE_TIME_MS;
-    // patternEncoderButtonInfo.button = nullptr;
-    // patternEncoderButtonInfo.generalHandler = nullptr;
+    // Create a properly configured Encoder::Config
+    Encoder::Config colorEncoderConfig;
+    colorEncoderConfig.name = colorEncoder.name;
+    colorEncoderConfig.debounce_ms = ENCODER_DEBOUNCE_MS; // Use a default debounce time
+    colorEncoderConfig.a_pin = colorEncoder.a_pin;
+    colorEncoderConfig.b_pin = colorEncoder.b_pin;
 
-    // // Add encoder buttons to the buttons map
-    // buttons[ButtonId::COLOR_ENCODER_BUTTON] = std::move(colorEncoderButtonInfo);
-    // buttons[ButtonId::PATTERN_ENCODER_BUTTON] = std::move(patternEncoderButtonInfo);
+    // Create the encoder
+    colorEncoder.encoder = std::make_unique<Encoder>(colorEncoderConfig);
 
-    // // Create and initialize the encoder buttons
-    // auto& colorEncoderButton = buttons[ButtonId::COLOR_ENCODER_BUTTON];
+    if (colorEncoder.encoder->init()) {
+        // Register callback for encoder
+        colorEncoder.encoder->registerCallback([this](Encoder::Event event, int32_t position) {
+            this->handleEncoderEvent(EncoderId::COLOR_ENCODER, event, position);
+        });
 
-    // Button::Config colorEncoderButtonConfig;
-    // colorEncoderButtonConfig.name = colorEncoderButton.name;
-    // colorEncoderButtonConfig.i2c_expander = i2cExpander_;
-    // colorEncoderButtonConfig.pin = colorEncoderButton.pin;
-    // colorEncoderButtonConfig.active_low = colorEncoderButton.active_low;
-    // colorEncoderButtonConfig.debounce_time_ms = colorEncoderButton.debounce_time_ms;
+        // Start monitoring encoder
+        colorEncoder.encoder->start();
 
-    // colorEncoderButton.button = std::make_unique<Button>(colorEncoderButtonConfig);
-
-    // // Initialize the button
-    // esp_err_t colorBtnRet = colorEncoderButton.button->init();
-    // if (colorBtnRet != ESP_OK) {
-    //     ESP_LOGE(TAG, "Failed to initialize color encoder button: %s",
-    //             esp_err_to_name(colorBtnRet));
-    // }
-
-    // // Register callback for this button
-    // colorEncoderButton.button->registerCallback([this, buttonId = ButtonId::COLOR_ENCODER_BUTTON](Button::Event event) {
-    //     this->handleButtonEvent(buttonId, event);
-    // });
-    // ESP_LOGI(TAG, "Initialized encoder button '%s' on TCA6408A pin %d",
-    //         colorEncoderButton.name.c_str(), colorEncoderButton.pin);
-
-    // auto& patternEncoderButton = buttons[ButtonId::PATTERN_ENCODER_BUTTON];
-
-    // Button::Config patternEncoderButtonConfig;
-    // patternEncoderButtonConfig.name = patternEncoderButton.name;
-    // patternEncoderButtonConfig.i2c_expander = i2cExpander_;
-    // patternEncoderButtonConfig.pin = patternEncoderButton.pin;
-    // patternEncoderButtonConfig.active_low = patternEncoderButton.active_low;
-    // patternEncoderButtonConfig.debounce_time_ms = patternEncoderButton.debounce_time_ms;
-
-    // patternEncoderButton.button = std::make_unique<Button>(patternEncoderButtonConfig);
-
-    // // Initialize the button
-    // esp_err_t patternBtnRet = patternEncoderButton.button->init();
-    // if (patternBtnRet != ESP_OK) {
-    //     ESP_LOGE(TAG, "Failed to initialize pattern encoder button: %s",
-    //             esp_err_to_name(patternBtnRet));
-    // }
-
-    // // Register callback for this button
-    // patternEncoderButton.button->registerCallback([this, buttonId = ButtonId::PATTERN_ENCODER_BUTTON](Button::Event event) {
-    //     this->handleButtonEvent(buttonId, event);
-    // });
-    // ESP_LOGI(TAG, "Initialized encoder button '%s' on TCA6408A pin %d",
-    //         patternEncoderButton.name.c_str(), patternEncoderButton.pin);
-
-    // // Create and initialize encoders
-    // auto& colorEncoder = encoders[EncoderId::COLOR_ENCODER];
-
-    // // Create a properly configured Encoder::Config
-    // Encoder::Config colorEncoderConfig;
-    // colorEncoderConfig.name = colorEncoder.name;
-    // colorEncoderConfig.a_pin = colorEncoder.a_pin;
-    // colorEncoderConfig.b_pin = colorEncoder.b_pin;
-    // colorEncoderConfig.poll_interval_ms = colorEncoder.poll_interval_ms;
-
-    // // Create the encoder
-    // colorEncoder.encoder = std::make_unique<Encoder>(colorEncoderConfig);
-
-    // if (colorEncoder.encoder->init()) {
-    //     // Register callback for encoder
-    //     colorEncoder.encoder->registerCallback([this](Encoder::Event event, int32_t position) {
-    //         this->handleEncoderEvent(EncoderId::COLOR_ENCODER, event, position);
-    //     });
-
-    //     // Start monitoring encoder
-    //     colorEncoder.encoder->start();
-
-    //     ESP_LOGI(TAG, "Initialized encoder '%s' on GPIO A:%ld B:%ld",
-    //              colorEncoder.name.c_str(), colorEncoder.a_pin, colorEncoder.b_pin);
-    // } else {
-    //     ESP_LOGE(TAG, "Failed to initialize color encoder");
-    // }
+        ESP_LOGI(TAG, "Initialized encoder '%s' on GPIO A:%ld B:%ld",
+                 colorEncoder.name.c_str(), colorEncoder.a_pin, colorEncoder.b_pin);
+    } else {
+        ESP_LOGE(TAG, "Failed to initialize color encoder");
+    }
 
     // // Initialize pattern encoder
     // auto& patternEncoder = encoders[EncoderId::PATTERN_ENCODER];
@@ -609,32 +534,6 @@ void InputManager::resetEncoderPosition(EncoderId encoderId)
         encoder->reset();
         ESP_LOGI(TAG, "Reset position for encoder %s", encoderIdToString(encoderId));
     }
-}
-
-bool InputManager::isEncoderButtonPressed(EncoderId encoderId)
-{
-    ButtonId buttonId;
-
-    // Map encoder ID to corresponding button ID
-    switch (encoderId)
-    {
-    case EncoderId::COLOR_ENCODER:
-        buttonId = ButtonId::COLOR_ENCODER_BUTTON;
-        break;
-    case EncoderId::PATTERN_ENCODER:
-        buttonId = ButtonId::PATTERN_ENCODER_BUTTON;
-        break;
-    default:
-        ESP_LOGE(TAG, "Unknown encoder ID %s", encoderIdToString(encoderId));
-        return false;
-    }
-
-    auto *button = getButton(buttonId);
-    if (!button)
-    {
-        return false;
-    }
-    return button->isPressed();
 }
 
 void InputManager::handleEncoderEvent(EncoderId encoderId, Encoder::Event event, int32_t position)
