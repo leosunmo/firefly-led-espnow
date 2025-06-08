@@ -121,7 +121,7 @@ private:
     // Event handling
     Event last_event_;
     TickType_t last_event_time_;     // Timestamp of the last event (for debouncing)
-    uint32_t debounced_count_;       // Counter for debounced events (for debugging)
+    TickType_t debounce_ticks_;      // Cached debounce threshold in ticks
     
     // PCNT handles
     pcnt_unit_handle_t pcnt_unit_;

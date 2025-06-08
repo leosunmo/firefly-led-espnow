@@ -27,7 +27,7 @@ Encoder::Encoder(const Config& config)
       running_(false),
       last_event_(Event::CLOCKWISE),
       last_event_time_(0),       // Will be properly initialized in start()
-      debounced_count_(0),       // Initialize debounce counter
+      debounce_ticks_(pdMS_TO_TICKS(config.debounce_ms)), // Cache the debounce threshold in ticks
       pcnt_unit_(nullptr),
       pcnt_chan_a_(nullptr),
       pcnt_chan_b_(nullptr),
@@ -191,10 +191,7 @@ bool Encoder::init() {
     // Initialize position
     position_ = 0;
 
-    // Log the configuration for debugging
-    ESP_LOGI(tag_, "Encoder initialized successfully with PCNT:");
-    ESP_LOGI(tag_, "  - Debounce period: %lu ms (%lu ticks)", config_.debounce_ms, pdMS_TO_TICKS(config_.debounce_ms));
-    ESP_LOGI(tag_, "  - Counter limits: -2/+2");
+    ESP_LOGI(tag_, "Encoder initialized successfully with PCNT (debounce: %lu ms)", config_.debounce_ms);
     
     return true;
 }
@@ -236,7 +233,7 @@ void Encoder::start() {
     // Initialize timestamp to current time to ensure proper debouncing from the start
     last_event_time_ = xTaskGetTickCount();
     
-    ESP_LOGI(tag_, "Encoder monitoring started, using callbacks with %lu ms debounce", config_.debounce_ms);
+    ESP_LOGI(tag_, "Encoder monitoring started");
     
     // Create a task to process events from the interrupt handler
     BaseType_t task_ret = xTaskCreate(
@@ -307,29 +304,14 @@ bool Encoder::processEvents() {
     // Get the current event that triggered the notification
     Event event = last_event_;
     
-    // Calculate time since last ISR event for logging
-    TickType_t current_time = xTaskGetTickCount();
-    TickType_t elapsed_time = calcElapsedTime(last_event_time_, current_time);
-    
     // Log the event (safe to do here since we're in task context)
-    if (config_.debounce_ms > 0) {
-        ESP_LOGI(tag_, "%s rotation detected, position: %ld (debounce: %lu ms)",
-                (event == Event::CLOCKWISE) ? "Clockwise" : "Counter-clockwise", 
-                position_, pdTICKS_TO_MS(elapsed_time));
-    } else {
-        ESP_LOGI(tag_, "%s rotation detected, position: %ld",
-                (event == Event::CLOCKWISE) ? "Clockwise" : "Counter-clockwise", 
-                position_);
-    }
+    ESP_LOGI(tag_, "%s rotation detected, position: %ld",
+            (event == Event::CLOCKWISE) ? "Clockwise" : "Counter-clockwise", 
+            position_);
     
     // Call user callback if registered
     if (callback_) {
         callback_(event, position_);
-    }
-    
-    // Log debounced events periodically (after every event, if there are debounced events)
-    if (debounced_count_ > 0) {
-        ESP_LOGI(tag_, "Debouncing stats: %lu events filtered out so far", (unsigned long)debounced_count_);
     }
     
     return true;
@@ -356,13 +338,9 @@ bool Encoder::pcntEventCallback(pcnt_unit_handle_t unit, const pcnt_watch_event_
         // Calculate elapsed time using our helper function
         TickType_t elapsed_time = calcElapsedTime(encoder->last_event_time_, current_time);
         
-        // Calculate threshold in ticks
-        TickType_t debounce_ticks = pdMS_TO_TICKS(encoder->config_.debounce_ms);
-        
         // Skip this event if it occurred too soon after the last one
-        if (elapsed_time < debounce_ticks) {
+        if (elapsed_time < encoder->debounce_ticks_) {
             // Debounce in effect, ignore this event
-            encoder->debounced_count_++;  // Increment the debounce counter (safe in ISR)
             return false;
         }
     }
