@@ -118,6 +118,12 @@ public:
      */
     esp_err_t writePort(uint8_t portValue);
 
+    /**
+     * @brief Get the I2C bus handle for sharing with other devices
+     * @return I2C bus handle or nullptr if not initialized
+     */
+    i2c_master_bus_handle_t getI2CBus() const { return i2c_bus_; }
+
 private:
     // TCA6408A registers
     static constexpr uint8_t REG_INPUT      = 0x00;

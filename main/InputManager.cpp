@@ -4,6 +4,8 @@
 #include "config.h"
 #include "Encoder.h"
 #include "esp_log.h"
+#include "i2c_scanner.h"
+
 
 // Singleton instance implementation
 InputManager &InputManager::getInstance()
@@ -46,6 +48,40 @@ esp_err_t InputManager::init()
     }
 
     ESP_LOGI(TAG, "TCA6408A initialized successfully");
+    
+    // Get I2C bus handle from TCA6408A to share with ADS1015
+    i2c_master_bus_handle_t shared_i2c_bus = i2cExpander_->getI2CBus();
+    if (shared_i2c_bus == nullptr) {
+        ESP_LOGW(TAG, "Could not get I2C bus handle from TCA6408A, ADS1015 will create its own bus");
+    } else {
+        ESP_LOGI(TAG, "Got I2C bus handle from TCA6408A to share with ADS1015");
+        
+        // Scan I2C bus to detect all connected devices (helps with debugging)
+        // i2c_scan_bus(shared_i2c_bus);
+    }
+    
+    // Initialize ADS1015 ADC
+    ADS1015::Config ads_config = {
+        .i2c_address = ADS1015_I2C_ADDRESS,  // I2C address from config.h
+        .sda_pin = I2C_SDA_PIN,              // Same I2C pins as TCA6408A
+        .scl_pin = I2C_SCL_PIN,              // Same I2C pins as TCA6408A
+        .i2c_freq_hz = ADS1015_I2C_FREQ_HZ,  // I2C frequency from config.h
+        .timeout_ms = ADS1015_TIMEOUT_MS,    // Timeout from config.h
+        .i2c_bus = shared_i2c_bus,           // Use shared I2C bus from TCA6408A
+        .manage_bus = false                  // Don't manage (delete) the bus since TCA6408A owns it
+    };
+    
+    adsAdc_ = std::make_shared<ADS1015>(ads_config);
+    ret = adsAdc_->init();
+    if (ret != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Failed to initialize ADS1015: %s", esp_err_to_name(ret));
+        ESP_LOGI(TAG, "Continuing without ADS1015 I2C ADC support");
+    }
+    else
+    {
+        ESP_LOGI(TAG, "ADS1015 initialized successfully");
+    }
 
     // Initialize buttons
 
@@ -99,57 +135,113 @@ esp_err_t InputManager::init()
     ESP_LOGI(TAG, "Buttons initialized successfully");
 
     // Initialize potentiometers
+    // First, set up the brightness potentiometer
     PotInfo brightnessPotInfo;
     brightnessPotInfo.name = "BrightnessPot";
-    brightnessPotInfo.gpio_num = POT_BRIGHTNESS_GPIO_NUM;
-    brightnessPotInfo.adc_unit = ADC_UNIT_1;
-    brightnessPotInfo.adc_channel = ADC_CHANNEL_3; // ADC1_CH3 corresponds to GPIO 3
-    brightnessPotInfo.attenuation = Potentiometer::Attenuation::DB_12;
     brightnessPotInfo.poll_interval_ms = POT_POLL_INTERVAL_MS;
     brightnessPotInfo.change_threshold = POT_CHANGE_THRESHOLD;
     brightnessPotInfo.enable_center_event = true;
     brightnessPotInfo.center_threshold = POT_CENTER_THRESHOLD;
-    brightnessPotInfo.pot = nullptr;
     brightnessPotInfo.generalHandler = nullptr;
-
-    // PotInfo speedPotInfo;
-    // speedPotInfo.name = "SpeedPot";
-    // speedPotInfo.gpio_num = POT_SPEED_GPIO_NUM;
-    // speedPotInfo.adc_unit = ADC_UNIT_1;
-    // speedPotInfo.adc_channel = ADC_CHANNEL_7;
-    // speedPotInfo.attenuation = Potentiometer::Attenuation::DB_12;
-    // speedPotInfo.poll_interval_ms = POT_POLL_INTERVAL_MS;
-    // speedPotInfo.change_threshold = POT_CHANGE_THRESHOLD;
-    // speedPotInfo.enable_center_event = true;
-    // speedPotInfo.center_threshold = POT_CENTER_THRESHOLD;
-    // speedPotInfo.pot = nullptr;
-    // speedPotInfo.generalHandler = nullptr;
-
-    // Add potentiometers to map
-    potentiometers[PotentiometerId::BRIGHTNESS_POT] = std::move(brightnessPotInfo);
-    // potentiometers[PotentiometerId::SPEED_POT] = std::move(speedPotInfo);
-
-    // Create and initialize the brightness potentiometer (required)
-    auto &brightnessPot = potentiometers[PotentiometerId::BRIGHTNESS_POT];
-
-    // Now we can directly use brightnessPot as a Potentiometer::Config
-    brightnessPot.pot = std::make_unique<Potentiometer>(brightnessPot);
-
-    if (!brightnessPot.pot->init())
+    
+    // Check if we have ADS1015 available for I2C potentiometers
+    if (adsAdc_ && adsAdc_->init() == ESP_OK)
     {
-        ESP_LOGE(TAG, "Failed to initialize brightness potentiometer");
-        return ESP_FAIL;
+        ESP_LOGI(TAG, "Using ADS1015 I2C ADC for potentiometers");
+        
+        // Configure brightness potentiometer to use ADS1015 channel 0
+        brightnessPotInfo.type = PotType::I2C_ADS1015;
+        brightnessPotInfo.i2c_channel = ADS1015::Channel::CHANNEL_0;
+        brightnessPotInfo.i2c_gain = ADS1015::Gain::GAIN_ONE;  // ±4.096V range
+        
+        // Add to potentiometer map
+        potentiometers[PotentiometerId::BRIGHTNESS_POT] = std::move(brightnessPotInfo);
+        
+        // Create and initialize I2C potentiometer
+        auto &brightnessPot = potentiometers[PotentiometerId::BRIGHTNESS_POT];
+        
+        // Create I2C potentiometer configuration
+        I2CPotentiometer::Config i2cPotConfig;
+        i2cPotConfig.name = brightnessPot.name;
+        i2cPotConfig.adc = adsAdc_;
+        i2cPotConfig.channel = brightnessPot.i2c_channel;
+        i2cPotConfig.gain = brightnessPot.i2c_gain;
+        i2cPotConfig.poll_interval_ms = brightnessPot.poll_interval_ms;
+        i2cPotConfig.change_threshold = brightnessPot.change_threshold;
+        i2cPotConfig.enable_center_event = brightnessPot.enable_center_event;
+        i2cPotConfig.center_threshold = brightnessPot.center_threshold;
+        i2cPotConfig.use_cumulative_tracking = true; // Enable cumulative change tracking for better responsiveness
+        
+        // Create I2C potentiometer instance
+        brightnessPot.i2c_pot = std::make_unique<I2CPotentiometer>(i2cPotConfig);
+        
+        if (!brightnessPot.i2c_pot->init())
+        {
+            ESP_LOGE(TAG, "Failed to initialize I2C brightness potentiometer");
+            return ESP_FAIL;
+        }
+        
+        // Register callback
+        brightnessPot.i2c_pot->registerCallback([this](I2CPotentiometer::Event event, uint32_t value, float percentage)
+            { this->handlePotEvent(PotentiometerId::BRIGHTNESS_POT, 
+                static_cast<Potentiometer::Event>(static_cast<int>(event)), value, percentage); });
+        
+        // Start monitoring
+        brightnessPot.i2c_pot->start();
+        
+        ESP_LOGI(TAG, "Initialized I2C potentiometer '%s' on ADS1015 channel %d",
+                 brightnessPot.name.c_str(), static_cast<int>(brightnessPot.i2c_channel));
     }
-
-    // Register callback for the brightness potentiometer
-    brightnessPot.pot->registerCallback([this](Potentiometer::Event event, uint32_t value, float percentage)
-                                        { this->handlePotEvent(PotentiometerId::BRIGHTNESS_POT, event, value, percentage); });
-
-    // Start monitoring brightness potentiometer values
-    brightnessPot.pot->start();
-
-    ESP_LOGI(TAG, "Initialized potentiometer '%s' on GPIO %d",
-             brightnessPot.name.c_str(), brightnessPot.gpio_num);
+    else
+    {
+        ESP_LOGI(TAG, "Using direct GPIO/ADC for potentiometers");
+        
+        // Configure brightness potentiometer to use direct GPIO
+        brightnessPotInfo.type = PotType::DIRECT_GPIO;
+        brightnessPotInfo.gpio_num = POT_BRIGHTNESS_GPIO_NUM;
+        brightnessPotInfo.adc_unit = ADC_UNIT_1;
+        brightnessPotInfo.adc_channel = ADC_CHANNEL_3; // ADC1_CH3 corresponds to GPIO 3
+        brightnessPotInfo.attenuation = Potentiometer::Attenuation::DB_12;
+        
+        // Add to potentiometer map
+        potentiometers[PotentiometerId::BRIGHTNESS_POT] = std::move(brightnessPotInfo);
+        
+        // Create and initialize direct GPIO potentiometer
+        auto &brightnessPot = potentiometers[PotentiometerId::BRIGHTNESS_POT];
+        
+        // Create Potentiometer configuration
+        Potentiometer::Config potConfig;
+        potConfig.name = brightnessPot.name;
+        potConfig.gpio_num = brightnessPot.gpio_num;
+        potConfig.adc_unit = brightnessPot.adc_unit;
+        potConfig.adc_channel = brightnessPot.adc_channel;
+        potConfig.attenuation = brightnessPot.attenuation;
+        potConfig.poll_interval_ms = brightnessPot.poll_interval_ms;
+        potConfig.change_threshold = brightnessPot.change_threshold;
+        potConfig.enable_center_event = brightnessPot.enable_center_event;
+        potConfig.center_threshold = brightnessPot.center_threshold;
+        
+        // Create direct GPIO potentiometer instance
+        brightnessPot.pot = std::make_unique<Potentiometer>(potConfig);
+        
+        if (!brightnessPot.pot->init())
+        {
+            ESP_LOGE(TAG, "Failed to initialize GPIO brightness potentiometer");
+            return ESP_FAIL;
+        }
+        
+        // Register callback
+        brightnessPot.pot->registerCallback([this](Potentiometer::Event event, uint32_t value, float percentage)
+            { this->handlePotEvent(PotentiometerId::BRIGHTNESS_POT, event, value, percentage); });
+        
+        // Start monitoring
+        brightnessPot.pot->start();
+        
+        ESP_LOGI(TAG, "Initialized GPIO potentiometer '%s' on GPIO %d",
+                brightnessPot.name.c_str(), brightnessPot.gpio_num);
+    }
+    
+    // TODO: Add speed potentiometer in a similar way when needed
 
     // Initialize encoders
     EncoderInfo colorEncoderInfo;
@@ -238,10 +330,15 @@ void InputManager::shutdown()
     // Stop potentiometers first
     for (auto &[potId, potInfo] : potentiometers)
     {
-        if (potInfo.pot)
+        if (potInfo.type == PotType::DIRECT_GPIO && potInfo.pot)
         {
-            ESP_LOGI(TAG, "Stopping potentiometer '%s'", potInfo.name.c_str());
+            ESP_LOGI(TAG, "Stopping GPIO potentiometer '%s'", potInfo.name.c_str());
             potInfo.pot->stop();
+        }
+        else if (potInfo.type == PotType::I2C_ADS1015 && potInfo.i2c_pot)
+        {
+            ESP_LOGI(TAG, "Stopping I2C potentiometer '%s'", potInfo.name.c_str());
+            potInfo.i2c_pot->stop();
         }
     }
 
@@ -373,27 +470,74 @@ Potentiometer *InputManager::getPotentiometer(PotentiometerId potId)
         return nullptr;
     }
 
-    return potentiometers[potId].pot.get();
+    auto &potInfo = potentiometers[potId];
+    if (potInfo.type == PotType::DIRECT_GPIO)
+    {
+        return potInfo.pot.get();
+    }
+    
+    ESP_LOGW(TAG, "Potentiometer ID %s is not a GPIO potentiometer", potIdToString(potId));
+    return nullptr;
+}
+
+I2CPotentiometer *InputManager::getI2CPotentiometer(PotentiometerId potId)
+{
+    if (potentiometers.find(potId) == potentiometers.end())
+    {
+        ESP_LOGE(TAG, "Potentiometer ID %s not found", potIdToString(potId));
+        return nullptr;
+    }
+
+    auto &potInfo = potentiometers[potId];
+    if (potInfo.type == PotType::I2C_ADS1015)
+    {
+        return potInfo.i2c_pot.get();
+    }
+    
+    ESP_LOGW(TAG, "Potentiometer ID %s is not an I2C potentiometer", potIdToString(potId));
+    return nullptr;
 }
 
 float InputManager::getPotPercentage(PotentiometerId potId)
 {
-    auto *pot = getPotentiometer(potId);
-    if (!pot)
+    if (potentiometers.find(potId) == potentiometers.end())
     {
+        ESP_LOGE(TAG, "Potentiometer ID %s not found", potIdToString(potId));
         return -1.0f;
     }
-    return pot->getPercentage();
+
+    auto &potInfo = potentiometers[potId];
+    if (potInfo.type == PotType::DIRECT_GPIO && potInfo.pot)
+    {
+        return potInfo.pot->getPercentage();
+    }
+    else if (potInfo.type == PotType::I2C_ADS1015 && potInfo.i2c_pot)
+    {
+        return potInfo.i2c_pot->getPercentage();
+    }
+    
+    return -1.0f;
 }
 
 uint32_t InputManager::getPotRaw(PotentiometerId potId)
 {
-    auto *pot = getPotentiometer(potId);
-    if (!pot)
+    if (potentiometers.find(potId) == potentiometers.end())
     {
+        ESP_LOGE(TAG, "Potentiometer ID %s not found", potIdToString(potId));
         return 0;
     }
-    return pot->getRawValue();
+
+    auto &potInfo = potentiometers[potId];
+    if (potInfo.type == PotType::DIRECT_GPIO && potInfo.pot)
+    {
+        return potInfo.pot->getRawValue();
+    }
+    else if (potInfo.type == PotType::I2C_ADS1015 && potInfo.i2c_pot)
+    {
+        return potInfo.i2c_pot->getRawValue();
+    }
+    
+    return 0;
 }
 
 void InputManager::handlePotEvent(PotentiometerId potId, Potentiometer::Event event,
