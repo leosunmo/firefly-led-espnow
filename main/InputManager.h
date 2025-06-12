@@ -5,9 +5,11 @@
 #include <functional>
 #include <string>
 #include "esp_err.h"
-#include "Button.h"
+#include "I2CButton.h"
 #include "Potentiometer.h"
+#include "I2CPotentiometer.h"
 #include "Encoder.h"
+#include "ADS1015.h"
 
 // Device type identifiers
 enum class InputDeviceType {
@@ -107,11 +109,18 @@ public:
                           std::function<void(Potentiometer::Event, uint32_t value, float percentage)> callback);
     
     /**
-     * @brief Get access to the underlying Potentiometer object
+     * @brief Get access to the underlying Potentiometer object (for direct GPIO potentiometers)
      * @param potId The potentiometer identifier
-     * @return Pointer to the Potentiometer object or nullptr if not found
+     * @return Pointer to the Potentiometer object or nullptr if not found or not a GPIO pot
      */
     Potentiometer* getPotentiometer(PotentiometerId potId);
+    
+    /**
+     * @brief Get access to the underlying I2CPotentiometer object (for I2C potentiometers)
+     * @param potId The potentiometer identifier
+     * @return Pointer to the I2CPotentiometer object or nullptr if not found or not an I2C pot
+     */
+    I2CPotentiometer* getI2CPotentiometer(PotentiometerId potId);
     
     /**
      * @brief Get the current percentage value of a potentiometer
@@ -201,9 +210,36 @@ private:
         std::map<Button::Event, std::function<void()>> eventHandlers;
     };
     
+    // Type of potentiometer
+    enum class PotType {
+        DIRECT_GPIO,  // Direct connection to GPIO/ADC
+        I2C_ADS1015   // Connected through ADS1015 I2C ADC
+    };
+    
     // Potentiometer related storage
-    struct PotInfo : public Potentiometer::Config {
-        std::unique_ptr<Potentiometer> pot;
+    struct PotInfo {
+        std::string name;                   // Potentiometer name
+        PotType type;                       // Type of potentiometer
+        
+        // Direct GPIO potentiometer (if type == DIRECT_GPIO)
+        int gpio_num;                       // GPIO number for ADC input
+        adc_unit_t adc_unit;                // ADC unit
+        adc_channel_t adc_channel;          // ADC channel
+        Potentiometer::Attenuation attenuation; // Signal attenuation
+        std::unique_ptr<Potentiometer> pot; // Potentiometer instance
+        
+        // I2C potentiometer (if type == I2C_ADS1015)
+        ADS1015::Channel i2c_channel;       // ADS1015 channel number
+        ADS1015::Gain i2c_gain;             // ADS1015 gain setting
+        std::unique_ptr<I2CPotentiometer> i2c_pot; // I2C Potentiometer instance
+        
+        // Common settings
+        uint32_t poll_interval_ms;          // Interval in ms between ADC readings
+        uint32_t change_threshold;          // Minimum change to trigger event
+        bool enable_center_event;           // Whether to trigger center events
+        uint32_t center_threshold;          // Threshold around center position
+        
+        // Handlers
         std::function<void(Potentiometer::Event, uint32_t, float)> generalHandler;
         std::map<Potentiometer::Event, std::function<void(uint32_t, float)>> eventHandlers;
     };
@@ -215,8 +251,9 @@ private:
         std::map<Encoder::Event, std::function<void(int32_t)>> eventHandlers;
     };
     
-    // I2C GPIO expander
-    std::shared_ptr<TCA6408A> i2cExpander_;
+    // I2C devices
+    std::shared_ptr<TCA6408A> i2cExpander_;  // TCA6408A I2C GPIO expander for buttons
+    std::shared_ptr<ADS1015> adsAdc_;        // ADS1015 I2C ADC for potentiometers
     
     // Storage for buttons, potentiometers and encoders
     std::map<ButtonId, ButtonInfo> buttons;

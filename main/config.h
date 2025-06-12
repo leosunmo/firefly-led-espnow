@@ -50,7 +50,12 @@ typedef enum {
 #define POT_BRIGHTNESS_GPIO_NUM 3   // ADC1 Channel 3
 #define POT_SPEED_GPIO_NUM 5        // ADC1 Channel 5
 #define POT_POLL_INTERVAL_MS 50     // Read potentiometer every 50ms
-#define POT_CHANGE_THRESHOLD 100    // Minimum change to trigger an event (0-4095)
+#define POT_CHANGE_THRESHOLD 40     // Minimum change to trigger an event (smaller for ADS1015 with max 1648)
 #define POT_CENTER_THRESHOLD 200    // Threshold around center position (0-4095)
+
+// ADS1015 ADC I2C Configuration
+#define ADS1015_I2C_ADDRESS 0x48    // Default I2C address for ADS1015 (0x72-0x75 based on ADR pin)
+#define ADS1015_I2C_FREQ_HZ 400000  // 400kHz I2C frequency
+#define ADS1015_TIMEOUT_MS 100      // I2C timeout in milliseconds
 
 #endif // CONFIG_H
