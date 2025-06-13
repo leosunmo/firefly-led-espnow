@@ -13,6 +13,11 @@
 #define ENCODER_POLL_INTERVAL_MS 10 // Read encoder every 10ms
 #define ENCODER_DEBOUNCE_TIME_MS 20 // Button debounce time
 
+// Encoder RGB LED configuration
+#define ENCODER_RGB_RED_PIN 23    // GPIO pin for red channel
+#define ENCODER_RGB_GREEN_PIN 22  // GPIO pin for green channel
+#define ENCODER_RGB_BLUE_PIN 21   // GPIO pin for blue channel
+
 typedef enum {
     DEVICE_ROLE_SENDER,
     DEVICE_ROLE_RECEIVER
@@ -25,9 +30,11 @@ typedef enum {
 
 #define USE_POINT_TO_POINT true
 
-#define SENDER_LOG_LEVEL ESP_LOG_DEBUG
+#define SENDER_LOG_LEVEL ESP_LOG_INFO
 #define RECEIVER_LOG_LEVEL ESP_LOG_DEBUG
-#define UART_LOG_LEVEL ESP_LOG_DEBUG
+#define UART_LOG_LEVEL ESP_LOG_INFO
+#define INPUTMANAGER_LOG_LEVEL ESP_LOG_DEBUG
+#define LEDMANAGER_LOG_LEVEL ESP_LOG_DEBUG
 
 // I2C Configuration
 #define I2C_SDA_PIN 6 // Default SDA pin for I2C

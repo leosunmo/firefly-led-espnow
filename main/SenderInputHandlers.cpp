@@ -23,8 +23,31 @@ void Sender::setupInputHandlers() {
     });
 
     inputManager.registerButtonHandler(ButtonId::RED_BUTTON, Button::Event::PRESSED, [this]() {
-        ESP_LOGI(TAG, "Red button action: sending punch command");
-        sendEffectPunch(100); // Full intensity punch effect
+        // Get reference to LED Manager
+        LEDManager& ledManager = LEDManager::getInstance();
+        
+        // Define the LED we're working with
+        auto ledId = LEDManager::LEDId::ENCODER_RGB;
+        
+        // Check if animation is running using the public method
+        if (ledManager.isAnimationRunning(ledId)) {
+            // Animation is running, stop it and send punch effect
+            ESP_LOGI(TAG, "Red button action: toggling animation OFF, sending punch command");
+            ledManager.stopAnimation(ledId);
+            sendEffectPunch(100); // Full intensity punch effect
+        } else {
+            // No animation running, start a new one
+            ESP_LOGI(TAG, "Red button action: toggling animation ON");
+            
+            // Create animation config
+            LEDManager::AnimationConfig breathingConfig;
+            breathingConfig.type = LEDManager::AnimationType::BREATHING;
+            breathingConfig.duration_ms = 800;  // 800ms per breathing cycle
+            breathingConfig.repeat_count = 0;   // Run continuously
+            
+            // Start animation with current color
+            ledManager.startAnimation(ledId, breathingConfig);
+        }
     });
 
     // ====================
@@ -61,7 +84,14 @@ void Sender::setupInputHandlers() {
             // Access static variable directly without capture
             encoderHue = (encoderHue + 5) % 360;
             ESP_LOGI(TAG, "Color encoder: Hue changed to %u degrees", encoderHue);
+            
+            // Send the new hue to receivers
             sendHueChange(encoderHue);
+            
+            // Update the local RGB LED - using 100% saturation for vibrant colors
+            // This will update the LED's stored HSV state which the animation will use
+            LEDManager::getInstance().setHSV(LEDManager::LEDId::ENCODER_RGB, 
+                LEDManager::HSV(encoderHue, 100, 100)); // Update encoder RGB LED with full saturation
         });
     
     // Counter-clockwise rotation decreases hue
@@ -71,7 +101,14 @@ void Sender::setupInputHandlers() {
             // Access static variable directly without capture
             encoderHue = (encoderHue + 355) % 360;
             ESP_LOGI(TAG, "Color encoder: Hue changed to %u degrees", encoderHue);
+            
+            // Send the new hue to receivers
             sendHueChange(encoderHue);
+            
+            // Update the local RGB LED - using 100% saturation for vibrant colors
+            // This will update the LED's stored HSV state which the animation will use
+            LEDManager::getInstance().setHSV(LEDManager::LEDId::ENCODER_RGB, 
+                LEDManager::HSV(encoderHue, 100, 100)); // Update encoder RGB LED with full saturation
         });
     
     // Pattern encoder for pattern selection

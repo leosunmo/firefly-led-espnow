@@ -27,7 +27,7 @@ ADS1015::~ADS1015()
 
 esp_err_t ADS1015::init()
 {
-    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+    esp_log_level_set(TAG, ESP_LOG_INFO);
 
     esp_err_t ret = ESP_OK;
     
