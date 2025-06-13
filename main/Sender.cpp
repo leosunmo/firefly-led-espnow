@@ -271,7 +271,7 @@ void Sender::processOutgoingMessages(void *pvParameter) {
             }
 
             if (peerCount.total_num == 0) {
-                ESP_LOGW(TAG, "No registered peers. Skipping message send.");
+                ESP_LOGD(TAG, "No registered peers. Skipping message send.");
                 delete sendParams;
                 continue;
             }
@@ -322,7 +322,7 @@ void Sender::prepareSendParams(SendParams &sendParams, const uint8_t *payload, s
     messageData->seq_num = getNextSequenceNumber(sendParams.dest_mac);
     messageData->payload_type = static_cast<uint8_t>(payload_type);
 
-    ESP_LOGI(TAG, "Preparing to send payload type: %d", messageData->payload_type);
+    ESP_LOGD(TAG, "Preparing to send payload type: %d", messageData->payload_type);
 
     // Copy the payload into the flexible array member
     memcpy(messageData->payload, payload, payload_len);
@@ -335,7 +335,7 @@ void Sender::prepareSendParams(SendParams &sendParams, const uint8_t *payload, s
 
     messageData->crc = calculatedCrc;
 
-    ESP_LOGI(TAG, "Calculated CRC: %04X", messageData->crc);
+    ESP_LOGD(TAG, "Calculated CRC: %04X", messageData->crc);
 
     // Ensure raw_data buffer is large enough to hold the entire messageData
     if (messageDataSize > sizeof(sendParams.raw_data)) {
@@ -401,14 +401,14 @@ void Sender::logRegisteredPeers() {
     esp_now_peer_num_t peerCount = {};
     esp_now_get_peer_num(&peerCount);
 
-    ESP_LOGI(TAG, "Total registered peers: %d", peerCount.total_num);
+    ESP_LOGD(TAG, "Total registered peers: %d", peerCount.total_num);
 
     if (peerCount.total_num > 0) {
         esp_now_peer_info_t peerInfo = {};
 
         for (int i = 0; i < peerCount.total_num; i++) {
             if (esp_now_fetch_peer(true, &peerInfo) == ESP_OK) {
-                ESP_LOGI(TAG, "Peer %d: MAC=" MACSTR, i, MAC2STR(peerInfo.peer_addr));
+                ESP_LOGD(TAG, "Peer %d: MAC=" MACSTR, i, MAC2STR(peerInfo.peer_addr));
             } else {
                 ESP_LOGE(TAG, "Failed to fetch info for peer %d", i);
             }
