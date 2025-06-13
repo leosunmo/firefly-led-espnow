@@ -5,6 +5,7 @@
 #include "Encoder.h"
 #include "esp_log.h"
 #include "i2c_scanner.h"
+#include "LEDManager.h"
 
 
 // Singleton instance implementation
@@ -26,7 +27,18 @@ InputManager::~InputManager()
 
 esp_err_t InputManager::init()
 {
+    esp_log_level_set(TAG, INPUTMANAGER_LOG_LEVEL); // Set log level for this module
     ESP_LOGI(TAG, "Initializing InputManager");
+    
+    // Initialize LED Manager first - this is critical for LED animations to work
+    ESP_LOGI(TAG, "Initializing LEDManager");
+    esp_err_t err = LEDManager::getInstance().init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize LEDManager: %s", esp_err_to_name(err));
+        // Continue anyway - we might still be able to use other input components
+    } else {
+        ESP_LOGI(TAG, "LEDManager initialized successfully");
+    }
 
     // Initialize TCA6408A I2C GPIO expander
     TCA6408A::Config tca_config = {
@@ -54,7 +66,7 @@ esp_err_t InputManager::init()
     if (shared_i2c_bus == nullptr) {
         ESP_LOGW(TAG, "Could not get I2C bus handle from TCA6408A, ADS1015 will create its own bus");
     } else {
-        ESP_LOGI(TAG, "Got I2C bus handle from TCA6408A to share with ADS1015");
+        ESP_LOGD(TAG, "Got I2C bus handle from TCA6408A to share with ADS1015");
         
         // Scan I2C bus to detect all connected devices (helps with debugging)
         // i2c_scan_bus(shared_i2c_bus);
@@ -290,6 +302,59 @@ esp_err_t InputManager::init()
     } else {
         ESP_LOGE(TAG, "Failed to initialize color encoder");
     }
+
+    ESP_LOGI(TAG, "Initializing LED Manager example");
+    
+    // Initialize LED Manager
+    err = LEDManager::getInstance().init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize LED Manager: %s", esp_err_to_name(err));
+    }
+    
+    // Configure encoder RGB LED (common anode)
+    LEDManager::RGBLEDConfig encoderLedConfig;
+    encoderLedConfig.name = "EncoderLED";
+    encoderLedConfig.red_pin = ENCODER_RGB_RED_PIN;    // GPIO pin for red
+    encoderLedConfig.green_pin = ENCODER_RGB_GREEN_PIN;  // GPIO pin for green
+    encoderLedConfig.blue_pin = ENCODER_RGB_BLUE_PIN;   // GPIO pin for blue
+    encoderLedConfig.red_channel = LEDC_CHANNEL_0;    // LEDC channel for red
+    encoderLedConfig.green_channel = LEDC_CHANNEL_1;  // LEDC channel for green
+    encoderLedConfig.blue_channel = LEDC_CHANNEL_2;   // LEDC channel for blue
+    encoderLedConfig.common_anode = true;  // Common anode RGB LED
+    
+    // Register the encoder LED
+    err = LEDManager::getInstance().registerLED(LEDManager::LEDId::ENCODER_RGB, encoderLedConfig);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register encoder LED: %s", esp_err_to_name(err));
+    }
+
+    ESP_LOGI(TAG, "Encoder RGB LED registered successfully");
+    
+    // First set a solid color so we can clearly see the transition to animation
+    ESP_LOGI(TAG, "Setting to solid blue before starting animation");
+    LEDManager::HSV blue_base(240, 100, 100);  // Blue color (H=240)
+    LEDManager::getInstance().setHSV(LEDManager::LEDId::ENCODER_RGB, blue_base);
+    vTaskDelay(pdMS_TO_TICKS(2000)); // Show solid blue for 2 seconds
+    
+   
+    ESP_LOGI(TAG, "Starting breathing animation on encoder LED");
+    LEDManager::AnimationConfig breathingConfig;
+    breathingConfig.type = LEDManager::AnimationType::BREATHING;
+    breathingConfig.duration_ms = 800;  // 800 ms per breathing cycle for a smooth effect
+    breathingConfig.repeat_count = 0;    // Run continuously until stopped
+    
+    // Get current LED color to check it in the logs, but don't explicitly set it in the config
+    // This ensures the animation will continue with whatever color is set by the encoder
+    auto currentLedHsv = LEDManager::getInstance().getCurrentColorHSV(LEDManager::LEDId::ENCODER_RGB);
+    
+    ESP_LOGI(TAG, "Starting breathing animation with current LED color HSV(%u, %u, %u)", 
+             currentLedHsv.h, currentLedHsv.s, currentLedHsv.v);
+    
+    err = LEDManager::getInstance().startAnimation(LEDManager::LEDId::ENCODER_RGB, breathingConfig);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start breathing animation: %s", esp_err_to_name(err));
+    }
+
 
     // // Initialize pattern encoder
     // auto& patternEncoder = encoders[EncoderId::PATTERN_ENCODER];

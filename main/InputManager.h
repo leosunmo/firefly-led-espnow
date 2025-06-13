@@ -10,6 +10,7 @@
 #include "I2CPotentiometer.h"
 #include "Encoder.h"
 #include "ADS1015.h"
+#include "LEDManager.h"
 
 // Device type identifiers
 enum class InputDeviceType {
