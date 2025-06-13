@@ -13,6 +13,8 @@ LEDManager::LEDManager() :
     animation_manager_task(nullptr),
     animation_manager_running(false),
     animation_mutex(nullptr),
+    task_control_mutex(nullptr),
+    task_suspended(false),
     initialized(false)
 {
     ESP_LOGI(TAG, "LEDManager singleton instance created");
@@ -24,6 +26,11 @@ LEDManager::~LEDManager()
     if (animation_manager_running) {
         animation_manager_running = false;
         
+        // Wake up task if suspended to allow clean exit
+        if (task_suspended && animation_manager_task != nullptr) {
+            vTaskResume(animation_manager_task);
+        }
+        
         // Wait for task to exit
         if (animation_manager_task != nullptr) {
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -31,10 +38,15 @@ LEDManager::~LEDManager()
             animation_manager_task = nullptr;
         }
         
-        // Free the mutex
+        // Free the mutexes
         if (animation_mutex != nullptr) {
             vSemaphoreDelete(animation_mutex);
             animation_mutex = nullptr;
+        }
+        
+        if (task_control_mutex != nullptr) {
+            vSemaphoreDelete(task_control_mutex);
+            task_control_mutex = nullptr;
         }
     }
     
@@ -65,6 +77,15 @@ esp_err_t LEDManager::init()
         return ESP_ERR_NO_MEM;
     }
     
+    // Create mutex for task control
+    task_control_mutex = xSemaphoreCreateMutex();
+    if (task_control_mutex == nullptr) {
+        ESP_LOGE(TAG, "Failed to create task control mutex");
+        vSemaphoreDelete(animation_mutex);
+        animation_mutex = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+    
     // Start animation manager task
     animation_manager_running = true;
     BaseType_t res = xTaskCreate(
@@ -80,6 +101,8 @@ esp_err_t LEDManager::init()
         ESP_LOGE(TAG, "Failed to create animation manager task");
         vSemaphoreDelete(animation_mutex);
         animation_mutex = nullptr;
+        vSemaphoreDelete(task_control_mutex);
+        task_control_mutex = nullptr;
         return ESP_FAIL;
     }
     
@@ -401,8 +424,21 @@ esp_err_t LEDManager::startAnimation(LEDId ledId, const AnimationConfig& config)
     // Add to active animations list
     active_animations.push_back(anim);
     
-    // Release the mutex
+    // Check if task is suspended and needs to be resumed
+    bool was_empty = active_animations.size() == 1;
+    
+    // Release the animation mutex
     xSemaphoreGive(animation_mutex);
+    
+    // Resume task if this is the first animation
+    if (was_empty && xSemaphoreTake(task_control_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        if (task_suspended && animation_manager_task != nullptr) {
+            ESP_LOGD(TAG, "Resuming animation manager task for new animation");
+            task_suspended = false;
+            vTaskResume(animation_manager_task);
+        }
+        xSemaphoreGive(task_control_mutex);
+    }
     
     ESP_LOGI(TAG, "Started %s animation on LED %s (duration: %lu ms, repeats: %s, current hue: %u)",
              animationTypeToString(config.type), 
@@ -535,6 +571,21 @@ void LEDManager::updateAnimations()
     // Handle empty animation list quickly
     if (active_animations.empty()) {
         xSemaphoreGive(animation_mutex);
+        
+        // Suspend the task if there are no animations
+        if (xSemaphoreTake(task_control_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            if (!task_suspended) {
+                ESP_LOGD(TAG, "No active animations, suspending animation manager task");
+                task_suspended = true;
+                xSemaphoreGive(task_control_mutex);
+                vTaskSuspend(NULL); // Suspend itself
+                
+                // When resumed, immediately return to avoid processing this frame
+                ESP_LOGD(TAG, "Animation manager task resumed");
+                return;
+            }
+            xSemaphoreGive(task_control_mutex);
+        }
         return;
     }
     
@@ -860,6 +911,19 @@ const char* LEDManager::ledIdToString(LEDId id)
         default:
             return "UNKNOWN_LED";
     }
+}
+
+bool LEDManager::isAnimationRunning(LEDId ledId) const
+{
+    // Check if LED exists
+    auto it = leds.find(ledId);
+    if (it == leds.end()) {
+        ESP_LOGW(TAG, "LED %s not registered, cannot check animation status", ledIdToString(ledId));
+        return false;
+    }
+    
+    // Return the animation status
+    return it->second.animation_running;
 }
 
 LEDManager::HSV LEDManager::getCurrentColorHSV(LEDId ledId) const

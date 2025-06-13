@@ -152,6 +152,13 @@ public:
     esp_err_t stopAnimation(LEDId ledId);
     
     /**
+     * @brief Check if an LED has an animation running
+     * @param ledId The LED identifier
+     * @return true if the LED has an animation running, false otherwise
+     */
+    bool isAnimationRunning(LEDId ledId) const;
+    
+    /**
      * @brief Get the current HSV color of an LED
      * @param ledId The LED identifier
      * @return The current HSV color
@@ -230,6 +237,10 @@ private:
     TaskHandle_t animation_manager_task;
     bool animation_manager_running;
     SemaphoreHandle_t animation_mutex;
+    
+    // Task suspension control
+    SemaphoreHandle_t task_control_mutex;
+    bool task_suspended;
     
     // Active animations
     std::vector<AnimationState> active_animations;
