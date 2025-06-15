@@ -23,8 +23,8 @@ enum class InputDeviceType {
 enum class ButtonId {
     BLUE_BUTTON,
     RED_BUTTON,
-    COLOR_ENCODER_BUTTON,
-    PATTERN_ENCODER_BUTTON,
+    HUE_A_ENCODER_BUTTON,
+    HUE_B_ENCODER_BUTTON,
     // Add new buttons here
 };
 
@@ -37,8 +37,8 @@ enum class PotentiometerId {
 
 // Encoder ID enum for future encoder support
 enum class EncoderId {
-    COLOR_ENCODER,
-    PATTERN_ENCODER,
+    HUE_A_ENCODER,
+    HUE_B_ENCODER,
     // Add new encoders here
 };
 

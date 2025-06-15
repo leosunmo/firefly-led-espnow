@@ -113,9 +113,27 @@ esp_err_t InputManager::init()
     blueButtonInfo.button = nullptr;
     blueButtonInfo.generalHandler = nullptr;
 
+    ButtonInfo HueAEncoderButtonInfo;
+    HueAEncoderButtonInfo.name = "HueAEncoderButton";
+    HueAEncoderButtonInfo.pin = 2; // TCA6408A pin 1
+    HueAEncoderButtonInfo.active_low = true;
+    HueAEncoderButtonInfo.debounce_time_ms = CONFIG_BUTTON_DEBOUNCE_TIME_MS;
+    HueAEncoderButtonInfo.button = nullptr;
+    HueAEncoderButtonInfo.generalHandler = nullptr;
+
+    ButtonInfo HueBEncoderButtonInfo;
+    HueBEncoderButtonInfo.name = "HueAEncoderButton";
+    HueBEncoderButtonInfo.pin = 3; // TCA6408A pin 1
+    HueBEncoderButtonInfo.active_low = true;
+    HueBEncoderButtonInfo.debounce_time_ms = CONFIG_BUTTON_DEBOUNCE_TIME_MS;
+    HueBEncoderButtonInfo.button = nullptr;
+    HueBEncoderButtonInfo.generalHandler = nullptr;
+
     // Add buttons to map
     buttons[ButtonId::BLUE_BUTTON] = std::move(blueButtonInfo);
     buttons[ButtonId::RED_BUTTON] = std::move(redButtonInfo);
+    buttons[ButtonId::HUE_A_ENCODER_BUTTON] = std::move(HueAEncoderButtonInfo);
+    buttons[ButtonId::HUE_B_ENCODER_BUTTON] = std::move(HueBEncoderButtonInfo);
 
     // Create and initialize all buttons
     for (auto &[buttonId, buttonInfo] : buttons)
@@ -253,57 +271,51 @@ esp_err_t InputManager::init()
                 brightnessPot.name.c_str(), brightnessPot.gpio_num);
     }
     
-    // TODO: Add speed potentiometer in a similar way when needed
+    // Hue Encoder breathing animation config
+    LEDManager::AnimationConfig breathingConfig;
+    breathingConfig.type = LEDManager::AnimationType::BREATHING;
+    breathingConfig.duration_ms = 800;  // 800 ms per breathing cycle for a smooth effect
+    breathingConfig.repeat_count = 0;    // Run continuously until stopped
 
-    // Initialize encoders
-    EncoderInfo colorEncoderInfo;
-    colorEncoderInfo.name = "ColorEncoder";
-    colorEncoderInfo.a_pin = ENCODER_COLOR_A_PIN;
-    colorEncoderInfo.b_pin = ENCODER_COLOR_B_PIN;
-    colorEncoderInfo.encoder = nullptr;
-    colorEncoderInfo.generalHandler = nullptr;
-
-    // EncoderInfo patternEncoderInfo;
-    // patternEncoderInfo.name = "PatternEncoder";
-    // patternEncoderInfo.a_pin = ENCODER_PATTERN_A_PIN;
-    // patternEncoderInfo.b_pin = ENCODER_PATTERN_B_PIN;
-    // patternEncoderInfo.poll_interval_ms = ENCODER_POLL_INTERVAL_MS;
-    // patternEncoderInfo.encoder = nullptr;
-    // patternEncoderInfo.generalHandler = nullptr;
+    // Initialize hue A encoder
+    EncoderInfo hueAEncoderInfo;
+    hueAEncoderInfo.name = "HueAEncoder";
+    hueAEncoderInfo.a_pin = HUE_A_ENCODER_A_PIN;
+    hueAEncoderInfo.b_pin = HUE_A_ENCODER_B_PIN;
+    hueAEncoderInfo.encoder = nullptr;
+    hueAEncoderInfo.generalHandler = nullptr;
 
     // Add encoders to map
-    encoders[EncoderId::COLOR_ENCODER] = std::move(colorEncoderInfo);
-    // encoders[EncoderId::PATTERN_ENCODER] = std::move(patternEncoderInfo);
+    encoders[EncoderId::HUE_A_ENCODER] = std::move(hueAEncoderInfo);
 
     // Create and initialize encoders
-    auto& colorEncoder = encoders[EncoderId::COLOR_ENCODER];
+    auto& hueAEncoder = encoders[EncoderId::HUE_A_ENCODER];
 
     // Create a properly configured Encoder::Config
-    Encoder::Config colorEncoderConfig;
-    colorEncoderConfig.name = colorEncoder.name;
-    colorEncoderConfig.debounce_ms = ENCODER_DEBOUNCE_MS; // Use a default debounce time
-    colorEncoderConfig.a_pin = colorEncoder.a_pin;
-    colorEncoderConfig.b_pin = colorEncoder.b_pin;
+    Encoder::Config hueAEncoderConfig;
+    hueAEncoderConfig.name = hueAEncoder.name;
+    hueAEncoderConfig.debounce_ms = ENCODER_DEBOUNCE_MS; // Use a default debounce time
+    hueAEncoderConfig.a_pin = hueAEncoder.a_pin;
+    hueAEncoderConfig.b_pin = hueAEncoder.b_pin;
+    hueAEncoderConfig.velocity_scaling = 10;    // Divide velocity by 10 to get step scaling
 
     // Create the encoder
-    colorEncoder.encoder = std::make_unique<Encoder>(colorEncoderConfig);
+    hueAEncoder.encoder = std::make_unique<Encoder>(hueAEncoderConfig);
 
-    if (colorEncoder.encoder->init()) {
+    if (hueAEncoder.encoder->init()) {
         // Register callback for encoder
-        colorEncoder.encoder->registerCallback([this](Encoder::Event event, int32_t position) {
-            this->handleEncoderEvent(EncoderId::COLOR_ENCODER, event, position);
+        hueAEncoder.encoder->registerCallback([this](Encoder::Event event, int32_t position) {
+            this->handleEncoderEvent(EncoderId::HUE_A_ENCODER, event, position);
         });
 
         // Start monitoring encoder
-        colorEncoder.encoder->start();
+        hueAEncoder.encoder->start();
 
         ESP_LOGI(TAG, "Initialized encoder '%s' on GPIO A:%ld B:%ld",
-                 colorEncoder.name.c_str(), colorEncoder.a_pin, colorEncoder.b_pin);
+                 hueAEncoder.name.c_str(), hueAEncoder.a_pin, hueAEncoder.b_pin);
     } else {
-        ESP_LOGE(TAG, "Failed to initialize color encoder");
+        ESP_LOGE(TAG, "Failed to initialize hue A encoder");
     }
-
-    ESP_LOGI(TAG, "Initializing LED Manager example");
     
     // Initialize LED Manager
     err = LEDManager::getInstance().init();
@@ -312,77 +324,116 @@ esp_err_t InputManager::init()
     }
     
     // Configure encoder RGB LED (common anode)
-    LEDManager::RGBLEDConfig encoderLedConfig;
-    encoderLedConfig.name = "EncoderLED";
-    encoderLedConfig.red_pin = ENCODER_RGB_RED_PIN;    // GPIO pin for red
-    encoderLedConfig.green_pin = ENCODER_RGB_GREEN_PIN;  // GPIO pin for green
-    encoderLedConfig.blue_pin = ENCODER_RGB_BLUE_PIN;   // GPIO pin for blue
-    encoderLedConfig.red_channel = LEDC_CHANNEL_0;    // LEDC channel for red
-    encoderLedConfig.green_channel = LEDC_CHANNEL_1;  // LEDC channel for green
-    encoderLedConfig.blue_channel = LEDC_CHANNEL_2;   // LEDC channel for blue
-    encoderLedConfig.common_anode = true;  // Common anode RGB LED
+    LEDManager::RGBLEDConfig encoderHueALedConfig;
+    encoderHueALedConfig.name = "EncoderALed";
+    encoderHueALedConfig.red_pin = HUE_A_ENCODER_RGB_RED_PIN;    // GPIO pin for red
+    encoderHueALedConfig.green_pin = HUE_A_ENCODER_RGB_GREEN_PIN;  // GPIO pin for green
+    encoderHueALedConfig.blue_pin = HUE_A_ENCODER_RGB_BLUE_PIN;   // GPIO pin for blue
+    encoderHueALedConfig.red_channel = LEDC_CHANNEL_0;    // LEDC channel for red
+    encoderHueALedConfig.green_channel = LEDC_CHANNEL_1;  // LEDC channel for green
+    encoderHueALedConfig.blue_channel = LEDC_CHANNEL_2;   // LEDC channel for blue
+    encoderHueALedConfig.common_anode = true;  // Common anode RGB LED
     
     // Register the encoder LED
-    err = LEDManager::getInstance().registerLED(LEDManager::LEDId::ENCODER_RGB, encoderLedConfig);
+    err = LEDManager::getInstance().registerLED(LEDManager::LEDId::ENCODER_A_RGB, encoderHueALedConfig);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to register encoder LED: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to register encoder hue A LED: %s", esp_err_to_name(err));
     }
 
-    ESP_LOGI(TAG, "Encoder RGB LED registered successfully");
-    
-    // First set a solid color so we can clearly see the transition to animation
-    ESP_LOGI(TAG, "Setting to solid blue before starting animation");
-    LEDManager::HSV blue_base(240, 100, 100);  // Blue color (H=240)
-    LEDManager::getInstance().setHSV(LEDManager::LEDId::ENCODER_RGB, blue_base);
-    vTaskDelay(pdMS_TO_TICKS(2000)); // Show solid blue for 2 seconds
-    
+    ESP_LOGI(TAG, "Encoder hue A RGB LED registered successfully");
    
-    ESP_LOGI(TAG, "Starting breathing animation on encoder LED");
-    LEDManager::AnimationConfig breathingConfig;
-    breathingConfig.type = LEDManager::AnimationType::BREATHING;
-    breathingConfig.duration_ms = 800;  // 800 ms per breathing cycle for a smooth effect
-    breathingConfig.repeat_count = 0;    // Run continuously until stopped
-    
+    ESP_LOGI(TAG, "Starting breathing animation on ENCODER_A_RGB LED");
+
     // Get current LED color to check it in the logs, but don't explicitly set it in the config
     // This ensures the animation will continue with whatever color is set by the encoder
-    auto currentLedHsv = LEDManager::getInstance().getCurrentColorHSV(LEDManager::LEDId::ENCODER_RGB);
+    auto currentHueAHSV = LEDManager::getInstance().getCurrentColorHSV(LEDManager::LEDId::ENCODER_A_RGB);
     
     ESP_LOGI(TAG, "Starting breathing animation with current LED color HSV(%u, %u, %u)", 
-             currentLedHsv.h, currentLedHsv.s, currentLedHsv.v);
+             currentHueAHSV.h, currentHueAHSV.s, currentHueAHSV.v);
     
-    err = LEDManager::getInstance().startAnimation(LEDManager::LEDId::ENCODER_RGB, breathingConfig);
+    err = LEDManager::getInstance().startAnimation(LEDManager::LEDId::ENCODER_A_RGB, breathingConfig);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start breathing animation: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to start breathing animation for hue encoder A: %s", esp_err_to_name(err));
     }
 
 
-    // // Initialize pattern encoder
-    // auto& patternEncoder = encoders[EncoderId::PATTERN_ENCODER];
+        // Initialize encoders
+    EncoderInfo hueBEncoderInfo;
+    hueBEncoderInfo.name = "hueBEncoder";
+    hueBEncoderInfo.a_pin = HUE_B_ENCODER_A_PIN;
+    hueBEncoderInfo.b_pin = HUE_B_ENCODER_B_PIN;
+    hueBEncoderInfo.encoder = nullptr;
+    hueBEncoderInfo.generalHandler = nullptr;
 
-    // // Create a properly configured Encoder::Config
-    // Encoder::Config patternEncoderConfig;
-    // patternEncoderConfig.name = patternEncoder.name;
-    // patternEncoderConfig.a_pin = patternEncoder.a_pin;
-    // patternEncoderConfig.b_pin = patternEncoder.b_pin;
-    // patternEncoderConfig.poll_interval_ms = patternEncoder.poll_interval_ms;
+    // Add encoders to map
+    encoders[EncoderId::HUE_B_ENCODER] = std::move(hueBEncoderInfo);
 
-    // // Create the encoder
-    // patternEncoder.encoder = std::make_unique<Encoder>(patternEncoderConfig);
+    // Create and initialize encoders
+    auto& hueBEncoder = encoders[EncoderId::HUE_B_ENCODER];
 
-    // if (patternEncoder.encoder->init()) {
-    //     // Register callback for encoder
-    //     patternEncoder.encoder->registerCallback([this](Encoder::Event event, int32_t position) {
-    //         this->handleEncoderEvent(EncoderId::PATTERN_ENCODER, event, position);
-    //     });
+    // Create a properly configured Encoder::Config
+    Encoder::Config hueBEncoderConfig;
+    hueBEncoderConfig.name = hueBEncoder.name;
+    hueBEncoderConfig.debounce_ms = ENCODER_DEBOUNCE_MS;
+    hueBEncoderConfig.a_pin = hueBEncoder.a_pin;
+    hueBEncoderConfig.b_pin = hueBEncoder.b_pin;
+    hueBEncoderConfig.velocity_scaling = 10;      // Divide velocity by 10 to get step scaling
 
-    //     // Start monitoring encoder
-    //     patternEncoder.encoder->start();
+    // Create the encoder
+    hueBEncoder.encoder = std::make_unique<Encoder>(hueBEncoderConfig);
 
-    //     ESP_LOGI(TAG, "Initialized encoder '%s' on GPIO A:%ld B:%ld",
-    //              patternEncoder.name.c_str(), patternEncoder.a_pin, patternEncoder.b_pin);
-    // } else {
-    //     ESP_LOGE(TAG, "Failed to initialize pattern encoder");
-    // }
+    if (hueBEncoder.encoder->init()) {
+        // Register callback for encoder
+        hueBEncoder.encoder->registerCallback([this](Encoder::Event event, int32_t position) {
+            this->handleEncoderEvent(EncoderId::HUE_B_ENCODER, event, position);
+        });
+
+        // Start monitoring encoder
+        hueBEncoder.encoder->start();
+
+        ESP_LOGI(TAG, "Initialized encoder '%s' on GPIO A:%ld B:%ld",
+                 hueBEncoder.name.c_str(), hueBEncoder.a_pin, hueBEncoder.b_pin);
+    } else {
+        ESP_LOGE(TAG, "Failed to initialize hue B encoder");
+    }
+
+    // Initialize LED Manager
+    err = LEDManager::getInstance().init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize LED Manager: %s", esp_err_to_name(err));
+    }
+    
+    // Configure encoder RGB LED (common anode)
+    LEDManager::RGBLEDConfig encoderHueBLedConfig;
+    encoderHueBLedConfig.name = "EncoderBLed";
+    encoderHueBLedConfig.red_pin = HUE_B_ENCODER_RGB_RED_PIN;    // GPIO pin for red
+    encoderHueBLedConfig.green_pin = HUE_B_ENCODER_RGB_GREEN_PIN;  // GPIO pin for green
+    encoderHueBLedConfig.blue_pin = HUE_B_ENCODER_RGB_BLUE_PIN;   // GPIO pin for blue
+    encoderHueBLedConfig.red_channel = LEDC_CHANNEL_3;    // LEDC channel for red
+    encoderHueBLedConfig.green_channel = LEDC_CHANNEL_4;  // LEDC channel for green
+    encoderHueBLedConfig.blue_channel = LEDC_CHANNEL_5;   // LEDC channel for blue
+    encoderHueBLedConfig.common_anode = true;  // Common anode RGB LED
+    
+    // Register the encoder LED
+    err = LEDManager::getInstance().registerLED(LEDManager::LEDId::ENCODER_B_RGB, encoderHueBLedConfig);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register hue B encoder LED: %s", esp_err_to_name(err));
+    }
+
+    ESP_LOGI(TAG, "Encoder hue B RGB LED registered successfully");
+   
+    ESP_LOGI(TAG, "Starting breathing animation on ENCODER_B_RGB LED");
+    // Get current LED color to check it in the logs, but don't explicitly set it in the config
+    // This ensures the animation will continue with whatever color is set by the encoder
+    auto currentHueBHSV = LEDManager::getInstance().getCurrentColorHSV(LEDManager::LEDId::ENCODER_B_RGB);
+    
+    ESP_LOGI(TAG, "Starting breathing animation with current LED color HSV(%u, %u, %u)", 
+             currentHueBHSV.h, currentHueBHSV.s, currentHueBHSV.v);
+    
+    err = LEDManager::getInstance().startAnimation(LEDManager::LEDId::ENCODER_B_RGB, breathingConfig);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start breathing animation for hue encoder B: %s", esp_err_to_name(err));
+    }
 
     ESP_LOGI(TAG, "InputManager initialized successfully");
     return ESP_OK;
@@ -647,10 +698,10 @@ const char *InputManager::buttonIdToString(ButtonId id)
         return "BLUE_BUTTON";
     case ButtonId::RED_BUTTON:
         return "RED_BUTTON";
-    case ButtonId::COLOR_ENCODER_BUTTON:
-        return "COLOR_ENCODER_BUTTON";
-    case ButtonId::PATTERN_ENCODER_BUTTON:
-        return "PATTERN_ENCODER_BUTTON";
+    case ButtonId::HUE_A_ENCODER_BUTTON:
+        return "HUE_A_ENCODER_BUTTON";
+    case ButtonId::HUE_B_ENCODER_BUTTON:
+        return "HUE_B_ENCODER_BUTTON";
     default:
         return "UNKNOWN";
     }
@@ -673,10 +724,10 @@ const char *InputManager::encoderIdToString(EncoderId id)
 {
     switch (id)
     {
-    case EncoderId::COLOR_ENCODER:
-        return "COLOR_ENCODER";
-    case EncoderId::PATTERN_ENCODER:
-        return "PATTERN_ENCODER";
+    case EncoderId::HUE_A_ENCODER:
+        return "HUE_A_ENCODER";
+    case EncoderId::HUE_B_ENCODER:
+        return "HUE_B_ENCODER";
     default:
         return "UNKNOWN";
     }
