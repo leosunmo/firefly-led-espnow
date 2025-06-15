@@ -31,7 +31,10 @@ Encoder::Encoder(const Config& config)
       pcnt_unit_(nullptr),
       pcnt_chan_a_(nullptr),
       pcnt_chan_b_(nullptr),
-      position_(0)
+      position_(0),
+      last_rotation_time_(0),    // Will be initialized on first rotation
+      rotation_velocity_(0),
+      velocity_steps_(1)
 {
     // Initialize tag for logging
     snprintf(tag_, sizeof(tag_), "Encoder:%s", config_.name.c_str());
@@ -112,8 +115,8 @@ bool Encoder::init() {
         return false;
     }
     
-    // Set edge and level actions for rotary encoding
-    // For channel A (count up when A leads B)
+    // Set edge and level actions for rotary encoding with more robust quadrature decoding
+    // For A channel: count up on rising edge when B is low, count down on rising edge when B is high
     ret = pcnt_channel_set_edge_action(pcnt_chan_a_, 
                                       PCNT_CHANNEL_EDGE_ACTION_DECREASE,   // No count on negative edge
                                       PCNT_CHANNEL_EDGE_ACTION_INCREASE); // Count up on positive edge
@@ -280,6 +283,8 @@ void Encoder::reset() {
     if (pcnt_unit_) {
         pcnt_unit_clear_count(pcnt_unit_);
         position_ = 0;
+        rotation_velocity_ = 0;
+        velocity_steps_ = 1;
         ESP_LOGI(tag_, "Encoder position reset to 0");
     }
 }
@@ -305,9 +310,9 @@ bool Encoder::processEvents() {
     Event event = last_event_;
     
     // Log the event (safe to do here since we're in task context)
-    ESP_LOGI(tag_, "%s rotation detected, position: %ld",
+    ESP_LOGI(tag_, "%s rotation detected, position: %ld (velocity: %.2f, steps: %ld)",
             (event == Event::CLOCKWISE) ? "Clockwise" : "Counter-clockwise", 
-            position_);
+            position_, rotation_velocity_, velocity_steps_);
     
     // Call user callback if registered
     if (callback_) {
@@ -339,8 +344,24 @@ bool Encoder::pcntEventCallback(pcnt_unit_handle_t unit, const pcnt_watch_event_
         TickType_t elapsed_time = calcElapsedTime(encoder->last_event_time_, current_time);
         
         // Skip this event if it occurred too soon after the last one
+        // Use a slightly longer debounce period for reversal detection
         if (elapsed_time < encoder->debounce_ticks_) {
             // Debounce in effect, ignore this event
+            return false;
+        }
+        
+        // Enhanced debounce: Ignore direction changes that happen too quickly
+        // This helps filter out phantom counter-rotations
+        const int watch_value = edata->watch_point_value;
+        bool clockwise = (watch_value > 0);
+        bool direction_change = (
+            (clockwise && encoder->last_event_ == Event::COUNTER_CLOCKWISE) ||
+            (!clockwise && encoder->last_event_ == Event::CLOCKWISE)
+        );
+        
+        // If this is a direction change and it happened too soon after the last event,
+        // it's likely a spurious event, so ignore it with a longer debounce window
+        if (direction_change && elapsed_time < encoder->debounce_ticks_ * 2) {
             return false;
         }
     }
@@ -353,18 +374,51 @@ bool Encoder::pcntEventCallback(pcnt_unit_handle_t unit, const pcnt_watch_event_
     const int watch_value = edata->watch_point_value;
     bool clockwise = (watch_value > 0);
     
-    // Update position based on direction
-    if (clockwise) {
-        encoder->position_++;
-    } else {
-        encoder->position_--;
+    // Handle velocity calculation for dynamic scaling
+    Event current_event = clockwise ? Event::CLOCKWISE : Event::COUNTER_CLOCKWISE;
+    
+    // Calculate velocity for dynamic step scaling
+    TickType_t now = xTaskGetTickCountFromISR();
+    
+    if (encoder->last_rotation_time_ > 0) {
+        // Calculate time delta in milliseconds
+        TickType_t time_delta = calcElapsedTime(encoder->last_rotation_time_, now);
+        
+        // Convert ticks to milliseconds and then calculate rotations per second
+        double delta_seconds = time_delta / (double)configTICK_RATE_HZ;
+        
+        // Calculate velocity (rotations per second)
+        if (delta_seconds > 0) {
+            encoder->rotation_velocity_ = 1.0 / delta_seconds;
+        }
+        
+        // Scale steps based on velocity
+        // 0-10: normal speed (1 step)
+        // 10-20: 2 steps
+        // 20+: 3+ steps
+        encoder->velocity_steps_ = 1 + (int)(encoder->rotation_velocity_ / encoder->config_.velocity_scaling);
+        
+        // Cap the maximum number of steps to prevent extreme jumps
+        if (encoder->velocity_steps_ > 10) {
+            encoder->velocity_steps_ = 10;
+        }
     }
+    
+    // Update timestamp for next calculation
+    encoder->last_rotation_time_ = now;
+    
+    // Apply velocity-based step scaling
+    if (clockwise) {
+        encoder->position_ += encoder->velocity_steps_;
+    } else {
+        encoder->position_ -= encoder->velocity_steps_;
+    }
+    
+    // Store the event for later processing
+    encoder->last_event_ = current_event;
     
     // Reset the count to avoid missing events
     pcnt_unit_clear_count(unit);
-    
-    // Store the event for later processing
-    encoder->last_event_ = clockwise ? Event::CLOCKWISE : Event::COUNTER_CLOCKWISE;
     
     // Notify the task that an event has occurred
     if (encoder->task_handle_ != nullptr) {

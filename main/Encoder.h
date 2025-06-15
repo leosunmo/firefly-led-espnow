@@ -36,9 +36,10 @@ public:
         int32_t a_pin;                // GPIO pin for encoder signal A
         int32_t b_pin;                // GPIO pin for encoder signal B
         uint32_t debounce_ms;         // Debounce time in milliseconds (default: 50ms)
+        uint8_t velocity_scaling;     // How much to scale steps by velocity (default: 10 = divide by 10)
         
         // Constructor with defaults for new parameters
-        Config() : name("encoder"), a_pin(-1), b_pin(-1), debounce_ms(50) {}
+        Config() : name("encoder"), a_pin(-1), b_pin(-1), debounce_ms(50), velocity_scaling(10) {}
     };
 
     /**
@@ -130,6 +131,11 @@ private:
     
     // Encoder state
     int32_t position_;
+    
+    // Velocity tracking for dynamic scaling
+    TickType_t last_rotation_time_;   // Last rotation timestamp for velocity calculation 
+    double rotation_velocity_;        // Rotations per second (for velocity-sensitive scaling)
+    int32_t velocity_steps_;          // Number of steps to add based on velocity
     
     // Logger tag
     char tag_[32];
