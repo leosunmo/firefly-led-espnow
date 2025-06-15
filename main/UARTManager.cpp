@@ -106,10 +106,12 @@ void UARTManager::sendDebugMessage(uint32_t value) {
     sendMessage(CommandType::DEBUG, value);
 }
 
-void UARTManager::sendHueCommand(uint16_t hue) {
-    // Use the existing sendMessage function to send the hue value
-    // The hue value (0-360) fits within the uint32_t value parameter
-    sendMessage(CommandType::HUE, static_cast<uint32_t>(hue));
+void UARTManager::sendHueCommand(uint8_t index, uint16_t hue) {
+    // Pack the index and hue value into a single uint32_t
+    // index in the most significant byte, hue in the lower 16 bits
+    uint32_t packedValue = (static_cast<uint32_t>(index) << 16) | static_cast<uint32_t>(hue);
+    sendMessage(CommandType::HUE, packedValue);
+    ESP_LOGI(TAG, "Sent hue command: index=%d, hue=%d°", index, hue);
 }
 
 void UARTManager::sendPunchCommand(uint8_t intensity) {
@@ -141,9 +143,10 @@ void UARTManager::processESPNOWMessage(const Message* message) {
         }
         case PayloadType::ChangeHue: {
             const ChangeHuePayload& payload = std::get<ChangeHuePayload>(message->parsed_payload);
+            uint8_t index = payload.index;
             uint16_t hue = payload.hueVal;
-            ESP_LOGI(TAG, "Forwarding hue change to RP2040: hue=%d°", hue);
-            sendHueCommand(hue);
+            ESP_LOGI(TAG, "Forwarding hue change to RP2040: index=%d, hue=%d°", index, hue);
+            sendHueCommand(index, hue);
             break;
         }
         case PayloadType::EffectPunch: {

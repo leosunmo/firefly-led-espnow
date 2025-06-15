@@ -37,11 +37,12 @@ void Sender::sendPatternChange(PatternType patternType, const uint8_t* destMac) 
     ESP_LOGI(TAG, "Sent pattern change: %d", static_cast<int>(patternType));
 }
 
-void Sender::sendHueChange(uint16_t hue, const uint8_t* destMac) {
+void Sender::sendHueChange(uint8_t index, uint16_t hue, const uint8_t* destMac) {
     ChangeHuePayload payload;
+    payload.index = index;
     payload.hueVal = hue;
     sendPayload(payload, PayloadType::ChangeHue, destMac);
-    ESP_LOGI(TAG, "Sent hue change: %ul", hue);
+    ESP_LOGI(TAG, "Sent hue change: index=%d, hue=%u°", index, hue);
 }
 
 void Sender::sendBrightnessChange(uint8_t brightness, const uint8_t* destMac) {

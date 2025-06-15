@@ -34,7 +34,7 @@ public:
     // Convenience methods for sending common payloads
     void sendPatternChange(PatternType patternType, const uint8_t* destMac = nullptr);
     void sendBrightnessChange(uint8_t brightness, const uint8_t* destMac = nullptr);
-    void sendHueChange(uint16_t hue, const uint8_t* destMac = nullptr);
+    void sendHueChange(uint8_t index, uint16_t hue, const uint8_t* destMac = nullptr);
     void sendSpeedChange(uint8_t speed, const uint8_t* destMac = nullptr);
     void sendEffectPunch(uint8_t intensity, const uint8_t* destMac = nullptr);
     void sendKeepaliveMessage(const uint8_t* destMac = nullptr);

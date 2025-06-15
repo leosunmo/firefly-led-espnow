@@ -221,7 +221,7 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
             expectedPayloadSize = sizeof(uint8_t); // A single byte for speed level
             break;
         case PayloadType::ChangeHue:
-            expectedPayloadSize = sizeof(uint16_t); // Two bytes for hue value (0-360)
+            expectedPayloadSize = sizeof(uint8_t) + sizeof(uint16_t); // One byte for index, two bytes for hue value (0-360)
             break;
         case PayloadType::EffectPunch:
             expectedPayloadSize = sizeof(uint8_t); // A single byte for punch intensity (0-100)
@@ -342,12 +342,13 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
             break;
         }
         case PayloadType::ChangeHue: {
-            if (payloadSize < sizeof(uint16_t)) {
+            if (payloadSize < sizeof(uint8_t) + sizeof(uint16_t)) {
                 ESP_LOGE(TAG, "Payload size mismatch for ChangeHuePayload");
                 return -1;
             }
             ChangeHuePayload payload;
-            payload.hueVal = (rawMessage->payload[0] << 8) | rawMessage->payload[1]; // Assuming big-endian
+            payload.index = rawMessage->payload[0]; // First byte is the index
+            payload.hueVal = (rawMessage->payload[1] << 8) | rawMessage->payload[2]; // Next two bytes are the hue value
             message->parsed_payload = payload;
             break;
         }

@@ -10,7 +10,9 @@
 // Setup handlers for all input devices
 void Sender::setupInputHandlers() {
     InputManager& inputManager = InputManager::getInstance();
-    static const char *TAG = "Sender";
+    static const char *TAG = "InputHandler";
+
+    esp_log_level_set(TAG, INPUTMANAGER_LOG_LEVEL); // Set log level for this module
     
     // ====================
     // Register button handlers
@@ -18,36 +20,13 @@ void Sender::setupInputHandlers() {
 
     // Register handler for blue button press - sends blue pattern
     inputManager.registerButtonHandler(ButtonId::BLUE_BUTTON, Button::Event::PRESSED, [this]() {
-        ESP_LOGI(TAG, "Blue button action: Sending blue pattern command");
-        sendPatternChange(PatternType::BluePattern);
+        ESP_LOGI(TAG, "Blue button action: Sending Ball pattern command");
+        sendPatternChange(PatternType::BallPattern);
     });
 
     inputManager.registerButtonHandler(ButtonId::RED_BUTTON, Button::Event::PRESSED, [this]() {
-        // Get reference to LED Manager
-        LEDManager& ledManager = LEDManager::getInstance();
-        
-        // Define the LED we're working with
-        auto ledId = LEDManager::LEDId::ENCODER_RGB;
-        
-        // Check if animation is running using the public method
-        if (ledManager.isAnimationRunning(ledId)) {
-            // Animation is running, stop it and send punch effect
-            ESP_LOGI(TAG, "Red button action: toggling animation OFF, sending punch command");
-            ledManager.stopAnimation(ledId);
-            sendEffectPunch(100); // Full intensity punch effect
-        } else {
-            // No animation running, start a new one
-            ESP_LOGI(TAG, "Red button action: toggling animation ON");
-            
-            // Create animation config
-            LEDManager::AnimationConfig breathingConfig;
-            breathingConfig.type = LEDManager::AnimationType::BREATHING;
-            breathingConfig.duration_ms = 800;  // 800ms per breathing cycle
-            breathingConfig.repeat_count = 0;   // Run continuously
-            
-            // Start animation with current color
-            ledManager.startAnimation(ledId, breathingConfig);
-        }
+        ESP_LOGI(TAG, "Red button action: Sending FullBar pattern command");
+        sendPatternChange(PatternType::FullBarPattern);
     });
 
     // ====================
@@ -74,76 +53,166 @@ void Sender::setupInputHandlers() {
     // Encoder handlers
     // ====================
 
-    // Color encoder for hue adjustment
-    static uint16_t encoderHue = 180; // Start at cyan
+
+    // Hue Encoder A
+    // This encoder adjusts the other hue for the FullBar Pattern
+
+    // Start encode A with yellow hue
+    static uint16_t encoderAHue = 60;
     
     // Clockwise rotation increases hue
-    inputManager.registerEncoderHandler(EncoderId::COLOR_ENCODER, Encoder::Event::CLOCKWISE, 
+    inputManager.registerEncoderHandler(EncoderId::HUE_A_ENCODER, Encoder::Event::CLOCKWISE, 
         [this](int32_t position) {
+            // If the animation isn't running, start it as we have moved the encoder.
+            if (!LEDManager::getInstance().isAnimationRunning(LEDManager::LEDId::ENCODER_A_RGB)) {
+                ESP_LOGI(TAG, "Starting animation for Hue A encoder");
+                LEDManager::AnimationConfig breathingConfig;
+                breathingConfig.type = LEDManager::AnimationType::BREATHING;
+                breathingConfig.duration_ms = 800;  // 800 ms per breathing cycle for a smooth effect
+                breathingConfig.repeat_count = 0;    // Run continuously until stopped
+                
+                // Start the animation with the current hue
+                LEDManager::getInstance().startAnimation(LEDManager::LEDId::ENCODER_A_RGB, breathingConfig);
+            }
+
             // Each encoder step is 5 degrees of hue
             // Access static variable directly without capture
-            encoderHue = (encoderHue + 5) % 360;
-            ESP_LOGI(TAG, "Color encoder: Hue changed to %u degrees", encoderHue);
-            
-            // Send the new hue to receivers
-            sendHueChange(encoderHue);
-            
+            encoderAHue = (encoderAHue + 5) % 360;
+            ESP_LOGI(TAG, "HueA: Hue changed to %u degrees", encoderAHue);
+                      
             // Update the local RGB LED - using 100% saturation for vibrant colors
             // This will update the LED's stored HSV state which the animation will use
-            LEDManager::getInstance().setHSV(LEDManager::LEDId::ENCODER_RGB, 
-                LEDManager::HSV(encoderHue, 100, 100)); // Update encoder RGB LED with full saturation
+            LEDManager::getInstance().setHSV(LEDManager::LEDId::ENCODER_A_RGB, 
+                LEDManager::HSV(encoderAHue, 100, 100)); // Update encoder RGB LED with full saturation
         });
     
     // Counter-clockwise rotation decreases hue
-    inputManager.registerEncoderHandler(EncoderId::COLOR_ENCODER, Encoder::Event::COUNTER_CLOCKWISE, 
+    inputManager.registerEncoderHandler(EncoderId::HUE_A_ENCODER, Encoder::Event::COUNTER_CLOCKWISE, 
         [this](int32_t position) {
+
+            // If the animation isn't running, start it as we have moved the encoder.
+            if (!LEDManager::getInstance().isAnimationRunning(LEDManager::LEDId::ENCODER_A_RGB)) {
+                ESP_LOGI(TAG, "Starting animation for Hue A encoder");
+                LEDManager::AnimationConfig breathingConfig;
+                breathingConfig.type = LEDManager::AnimationType::BREATHING;
+                breathingConfig.duration_ms = 800;  // 800 ms per breathing cycle for a smooth effect
+                breathingConfig.repeat_count = 0;    // Run continuously until stopped
+                
+                // Start the animation with the current hue
+                LEDManager::getInstance().startAnimation(LEDManager::LEDId::ENCODER_A_RGB, breathingConfig);
+            }
+
             // Each encoder step is 5 degrees of hue (355 is equivalent to -5 in mod 360)
             // Access static variable directly without capture
-            encoderHue = (encoderHue + 355) % 360;
-            ESP_LOGI(TAG, "Color encoder: Hue changed to %u degrees", encoderHue);
-            
-            // Send the new hue to receivers
-            sendHueChange(encoderHue);
+            encoderAHue = (encoderAHue + 355) % 360;
+            ESP_LOGI(TAG, "HueA: Hue changed to %u degrees", encoderAHue);
             
             // Update the local RGB LED - using 100% saturation for vibrant colors
             // This will update the LED's stored HSV state which the animation will use
-            LEDManager::getInstance().setHSV(LEDManager::LEDId::ENCODER_RGB, 
-                LEDManager::HSV(encoderHue, 100, 100)); // Update encoder RGB LED with full saturation
+            LEDManager::getInstance().setHSV(LEDManager::LEDId::ENCODER_A_RGB, 
+                LEDManager::HSV(encoderAHue, 100, 100)); // Update encoder RGB LED with full saturation
         });
-    
-    // Pattern encoder for pattern selection
-    static PatternType currentPattern = PatternType::BluePattern;
-    static const PatternType patterns[] = {
-        PatternType::BluePattern,
-        PatternType::RedPattern,
-        PatternType::GreenPattern,
-        PatternType::RainbowPattern,
-        PatternType::FirePattern,
-    };
-    static const int patternCount = sizeof(patterns) / sizeof(patterns[0]);
-    static int patternIndex = 0;
-    
-    // Rotation changes pattern
-    inputManager.registerEncoderHandler(EncoderId::PATTERN_ENCODER, 
-        [this](Encoder::Event event, int32_t position) {
-            if (event == Encoder::Event::CLOCKWISE) {
-                // Access static variables directly without capture
-                patternIndex = (patternIndex + 1) % patternCount;
-            } else if (event == Encoder::Event::COUNTER_CLOCKWISE) {
-                patternIndex = (patternIndex + patternCount - 1) % patternCount;
-            } else {
-                return; // Only handle rotation events here
-            }
-            
-            currentPattern = patterns[patternIndex];
-            ESP_LOGI(TAG, "Pattern encoder: Pattern changed to index %d", patternIndex);
-            sendPatternChange(currentPattern);
-        });
-    
-    // Button press activates special effect
-    inputManager.registerButtonHandler(ButtonId::PATTERN_ENCODER_BUTTON, Button::Event::PRESSED,
+
+    // Register button handler for Hue A encoder
+    inputManager.registerButtonHandler(ButtonId::HUE_A_ENCODER_BUTTON, Button::Event::PRESSED,
         [this]() {
-            ESP_LOGI(TAG, "Pattern encoder button: Activating effect punch");
-            sendEffectPunch(100); // Full intensity effect
+            ESP_LOGD(TAG, "Pattern encoder button: Activating effect punch");
+            // Get reference to LED Manager
+            LEDManager& ledManager = LEDManager::getInstance();
+            
+            // Define the LED we're working with
+            auto ledId = LEDManager::LEDId::ENCODER_A_RGB;
+            
+            // Check if animation is running using the public method
+            if (ledManager.isAnimationRunning(ledId)) {
+                // Animation is running, stop it
+                ESP_LOGI(TAG, "EncoderB: toggling animation OFF, sending new hue");
+                ledManager.stopAnimation(ledId);
+            }
+
+            // Send the new hue to receivers - use index 0 for primary hue
+            sendHueChange(0, encoderAHue);
+        });
+
+
+
+    // Hue Encoder B
+    // This encoder adjusts the other hue for the FullBar Pattern
+
+    // Start encode B with blueish hue
+    static uint16_t encoderBHue = 240;
+    
+    // Clockwise rotation increases hue
+    inputManager.registerEncoderHandler(EncoderId::HUE_B_ENCODER, Encoder::Event::CLOCKWISE, 
+        [this](int32_t position) {
+            // If the animation isn't running, start it as we have moved the encoder.
+            if (!LEDManager::getInstance().isAnimationRunning(LEDManager::LEDId::ENCODER_B_RGB)) {
+                ESP_LOGI(TAG, "Starting animation for Hue B encoder");
+                LEDManager::AnimationConfig breathingConfig;
+                breathingConfig.type = LEDManager::AnimationType::BREATHING;
+                breathingConfig.duration_ms = 800;  // 800 ms per breathing cycle for a smooth effect
+                breathingConfig.repeat_count = 0;    // Run continuously until stopped
+                
+                // Start the animation with the current hue
+                LEDManager::getInstance().startAnimation(LEDManager::LEDId::ENCODER_B_RGB, breathingConfig);
+            }
+
+            // Each encoder step is 5 degrees of hue
+            // Access static variable directly without capture
+            encoderBHue = (encoderBHue + 5) % 360;
+            ESP_LOGI(TAG, "HueB: Hue changed to %u degrees", encoderBHue);
+            
+            // Update the local RGB LED - using 100% saturation for vibrant colors
+            // This will update the LED's stored HSV state which the animation will use
+            LEDManager::getInstance().setHSV(LEDManager::LEDId::ENCODER_B_RGB, 
+                LEDManager::HSV(encoderBHue, 100, 100)); // Update encoder RGB LED with full saturation
+        });
+    
+    // Counter-clockwise rotation decreases hue
+    inputManager.registerEncoderHandler(EncoderId::HUE_B_ENCODER, Encoder::Event::COUNTER_CLOCKWISE, 
+        [this](int32_t position) {
+
+            // If the animation isn't running, start it as we have moved the encoder.
+            if (!LEDManager::getInstance().isAnimationRunning(LEDManager::LEDId::ENCODER_B_RGB)) {
+                ESP_LOGI(TAG, "Starting animation for Hue B encoder");
+                LEDManager::AnimationConfig breathingConfig;
+                breathingConfig.type = LEDManager::AnimationType::BREATHING;
+                breathingConfig.duration_ms = 800;  // 800 ms per breathing cycle for a smooth effect
+                breathingConfig.repeat_count = 0;    // Run continuously until stopped
+                
+                // Start the animation with the current hue
+                LEDManager::getInstance().startAnimation(LEDManager::LEDId::ENCODER_B_RGB, breathingConfig);
+            }
+
+            // Each encoder step is 5 degrees of hue (355 is equivalent to -5 in mod 360)
+            // Access static variable directly without capture
+            encoderBHue = (encoderBHue + 355) % 360;
+            ESP_LOGI(TAG, "HueB: Hue changed to %u degrees", encoderBHue);
+            
+            // Update the local RGB LED - using 100% saturation for vibrant colors
+            // This will update the LED's stored HSV state which the animation will use
+            LEDManager::getInstance().setHSV(LEDManager::LEDId::ENCODER_B_RGB, 
+                LEDManager::HSV(encoderBHue, 100, 100)); // Update encoder RGB LED with full saturation
+        });
+
+    // Register button handler for Hue B encoder
+    inputManager.registerButtonHandler(ButtonId::HUE_B_ENCODER_BUTTON, Button::Event::PRESSED,
+        [this]() {
+            ESP_LOGD(TAG, "Pattern encoder button: Activating effect punch");
+            // Get reference to LED Manager
+            LEDManager& ledManager = LEDManager::getInstance();
+            
+            // Define the LED we're working with
+            auto ledId = LEDManager::LEDId::ENCODER_B_RGB;
+            
+            // Check if animation is running using the public method
+            if (ledManager.isAnimationRunning(ledId)) {
+                // Animation is running, stop it
+                ESP_LOGI(TAG, "EncoderB: toggling animation OFF, sending new hue");
+                ledManager.stopAnimation(ledId);
+            }
+
+            // Send the new hue to receivers - use index 1 for secondary hue
+            sendHueChange(1, encoderBHue);
         });
 }

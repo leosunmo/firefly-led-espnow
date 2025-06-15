@@ -14,9 +14,9 @@
 // Define pattern types as enums
 enum class PatternType : uint8_t {
     NoPattern = 0,
-    RedPattern = 1,
-    GreenPattern = 2,
-    BluePattern = 3,
+    FullBarPattern = 1,
+    FullBarBallPattern = 2,
+    BallPattern = 3,
     RainbowPattern = 4,
     FirePattern = 5,
     SparklePattern = 6,
@@ -45,14 +45,15 @@ struct ChangeBrightnessPayload {
 };
 
 struct ChangeHuePayload {
+    uint8_t index; // Index of the hue to change (0-7)
     uint16_t hueVal; // hue value 0-360
     
     // Serialize the payload into a vector of bytes
     std::vector<uint8_t> serialize() const {
         std::vector<uint8_t> result;
-        // Split the 16-bit value into two bytes (little-endian)
-        result.push_back(hueVal & 0xFF);          // Low byte
-        result.push_back((hueVal >> 8) & 0xFF);   // High byte
+        result.push_back(index);                 // Index byte
+        result.push_back(hueVal & 0xFF);         // Low byte of hue
+        result.push_back((hueVal >> 8) & 0xFF);  // High byte of hue
         return result;
     }
 };

@@ -33,7 +33,7 @@ public:
     void sendBrightnessCommand(uint8_t brightness);
     void sendPatternCommand(PatternType pattern);
     void sendSpeedCommand(uint8_t speed);
-    void sendHueCommand(uint16_t hue);  // New function for Hue values (0-360)
+    void sendHueCommand(uint8_t index, uint16_t hue);  // Updated function for Hue values with index
     void sendPunchCommand(uint8_t intensity); // New function for Punch effect (0-100)
     void sendDebugMessage(uint32_t value);
     void sendMessage(CommandType cmd, uint32_t value);
