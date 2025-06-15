@@ -12,7 +12,6 @@ LEDManager &LEDManager::getInstance()
 LEDManager::LEDManager() : 
     animation_manager_task(nullptr),
     animation_manager_running(false),
-    animation_mutex(nullptr),
     task_control_mutex(nullptr),
     task_suspended(false),
     initialized(false)
@@ -39,10 +38,13 @@ LEDManager::~LEDManager()
         }
         
         // Free the mutexes
-        if (animation_mutex != nullptr) {
-            vSemaphoreDelete(animation_mutex);
-            animation_mutex = nullptr;
+        for (auto& mutex_pair : animation_mutexes) {
+            if (mutex_pair.second != nullptr) {
+                vSemaphoreDelete(mutex_pair.second);
+                mutex_pair.second = nullptr;
+            }
         }
+        animation_mutexes.clear();
         
         if (task_control_mutex != nullptr) {
             vSemaphoreDelete(task_control_mutex);
@@ -50,8 +52,8 @@ LEDManager::~LEDManager()
         }
     }
     
-    // Clear animations
-    active_animations.clear();
+    // Clear all LED animations
+    led_animations.clear();
     
     // LEDC doesn't need explicit deinitialization
     ESP_LOGW(TAG, "LEDManager singleton instance destroyed");
@@ -70,19 +72,10 @@ esp_err_t LEDManager::init()
         return err;
     }
     
-    // Create mutex for animation manager
-    animation_mutex = xSemaphoreCreateMutex();
-    if (animation_mutex == nullptr) {
-        ESP_LOGE(TAG, "Failed to create mutex for animation manager");
-        return ESP_ERR_NO_MEM;
-    }
-    
     // Create mutex for task control
     task_control_mutex = xSemaphoreCreateMutex();
     if (task_control_mutex == nullptr) {
         ESP_LOGE(TAG, "Failed to create task control mutex");
-        vSemaphoreDelete(animation_mutex);
-        animation_mutex = nullptr;
         return ESP_ERR_NO_MEM;
     }
     
@@ -99,8 +92,6 @@ esp_err_t LEDManager::init()
     
     if (res != pdPASS) {
         ESP_LOGE(TAG, "Failed to create animation manager task");
-        vSemaphoreDelete(animation_mutex);
-        animation_mutex = nullptr;
         vSemaphoreDelete(task_control_mutex);
         task_control_mutex = nullptr;
         return ESP_FAIL;
@@ -166,6 +157,16 @@ esp_err_t LEDManager::registerLED(LEDId ledId, const RGBLEDConfig& config)
     
     // Add to LEDs map
     leds[ledId] = led_info;
+    
+    // Create per-LED animation mutex
+    animation_mutexes[ledId] = xSemaphoreCreateMutex();
+    if (animation_mutexes[ledId] == nullptr) {
+        ESP_LOGE(TAG, "Failed to create mutex for LED %s", ledIdToString(ledId));
+        return ESP_ERR_NO_MEM;
+    }
+    
+    // Initialize the LED's animation list
+    led_animations[ledId] = std::vector<AnimationState>();
     
     ESP_LOGI(TAG, "LED %s registered as '%s' (R:%d, G:%d, B:%d)",
              ledIdToString(ledId), config.name.c_str(), 
@@ -281,40 +282,46 @@ esp_err_t LEDManager::setHSV(LEDId ledId, const HSV& color)
         
         // If this LED has an active animation, update the animation's initial color
         if (it->second.animation_running) {
-            // Take the mutex to protect animation state
-            if (xSemaphoreTake(animation_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-                // Find the animation for this LED and update its color
-                for (auto& anim : active_animations) {
-                    if (anim.ledId == ledId && anim.running) {
-                        // Update the color stored in animation state
-                        anim.initial_color.h = color.h;
-                        anim.initial_color.s = color.s;
-                        
-                        uint32_t current_time_ms = getCurrentTimeMs();
-                        
-                        // If the animation is already paused, just update the color without extending the pause
-                        if (anim.animation_paused) {
-                            ESP_LOGD(TAG, "Updated color during pause to hue %u", color.h);
-                        } else {
-                            // Animation not paused - mark that color was updated and pause the animation
-                            anim.color_updated = true;
-                            anim.color_update_time = current_time_ms;
+            // Take the LED-specific mutex
+            auto mutex_it = animation_mutexes.find(ledId);
+            if (mutex_it != animation_mutexes.end() && mutex_it->second != nullptr) {
+                if (xSemaphoreTake(mutex_it->second, pdMS_TO_TICKS(10)) == pdTRUE) {
+                    // Find the animation for this LED and update its color
+                    auto& led_animation_list = led_animations[ledId];
+                    for (auto& anim : led_animation_list) {
+                        if (anim.running) {
+                            // Update the color stored in animation state
+                            anim.initial_color.h = color.h;
+                            anim.initial_color.s = color.s;
                             
-                            // Pause the animation briefly to show the selected color at full brightness
-                            anim.animation_paused = true;
-                            anim.pause_until_ms = current_time_ms + 300; // Pause for 300ms
+                            uint32_t current_time_ms = getCurrentTimeMs();
                             
-                            ESP_LOGI(TAG, "Color changed to hue %u, pausing animation for preview", color.h);
+                            // If the animation is already paused, just update the color without extending the pause
+                            if (anim.animation_paused) {
+                                ESP_LOGD(TAG, "Updated color during pause to hue %u", color.h);
+                            } else {
+                                // Animation not paused - mark that color was updated and pause the animation
+                                anim.color_updated = true;
+                                anim.color_update_time = current_time_ms;
+                                
+                                // Pause the animation briefly to show the selected color at full brightness
+                                anim.animation_paused = true;
+                                anim.pause_until_ms = current_time_ms + 300; // Pause for 300ms
+                                
+                                ESP_LOGI(TAG, "Color changed to hue %u, pausing animation for preview", color.h);
+                            }
+                            break;
                         }
-                        break;
                     }
+                    xSemaphoreGive(mutex_it->second);
                 }
-                xSemaphoreGive(animation_mutex);
             }
         }
+        return setRGB(ledId, rgb);
     }
     
-    return setRGB(ledId, rgb);
+    ESP_LOGE(TAG, "LED %s not registered", ledIdToString(ledId));
+    return ESP_ERR_NOT_FOUND;
 }
 
 esp_err_t LEDManager::setBrightness(LEDId ledId, uint8_t brightness)
@@ -385,9 +392,15 @@ esp_err_t LEDManager::startAnimation(LEDId ledId, const AnimationConfig& config)
         return ESP_OK;
     }
     
-    // Take the mutex to protect animation state
-    if (xSemaphoreTake(animation_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take animation mutex");
+    // Take the mutex for this specific LED
+    auto mutex_it = animation_mutexes.find(ledId);
+    if (mutex_it == animation_mutexes.end() || mutex_it->second == nullptr) {
+        ESP_LOGE(TAG, "Animation mutex for LED %s not found", ledIdToString(ledId));
+        return ESP_FAIL;
+    }
+    
+    if (xSemaphoreTake(mutex_it->second, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to take animation mutex for LED %s", ledIdToString(ledId));
         return ESP_FAIL;
     }
     
@@ -420,15 +433,22 @@ esp_err_t LEDManager::startAnimation(LEDId ledId, const AnimationConfig& config)
     anim.color_update_time = anim.start_time_ms;
     anim.animation_paused = false;
     anim.pause_until_ms = 0;
+    anim.needsUpdate = false;
     
-    // Add to active animations list
-    active_animations.push_back(anim);
+    // Add to this specific LED's animation list
+    led_animations[ledId].push_back(anim);
     
-    // Check if task is suspended and needs to be resumed
-    bool was_empty = active_animations.size() == 1;
+    // Check if this is the first animation for any LED
+    bool was_empty = true;
+    for (const auto& animations_pair : led_animations) {
+        if (!animations_pair.second.empty()) {
+            was_empty = false;
+            break;
+        }
+    }
     
-    // Release the animation mutex
-    xSemaphoreGive(animation_mutex);
+    // Release the LED-specific mutex
+    xSemaphoreGive(mutex_it->second);
     
     // Resume task if this is the first animation
     if (was_empty && xSemaphoreTake(task_control_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -465,14 +485,21 @@ esp_err_t LEDManager::stopAnimation(LEDId ledId)
         return ESP_OK; // Nothing to stop
     }
     
-    // Take the mutex to protect animation state
-    if (xSemaphoreTake(animation_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take animation mutex");
+    // Take the mutex for this specific LED
+    auto mutex_it = animation_mutexes.find(ledId);
+    if (mutex_it == animation_mutexes.end() || mutex_it->second == nullptr) {
+        ESP_LOGE(TAG, "Animation mutex for LED %s not found", ledIdToString(ledId));
+        return ESP_FAIL;
+    }
+    
+    if (xSemaphoreTake(mutex_it->second, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to take animation mutex for LED %s", ledIdToString(ledId));
         return ESP_FAIL;
     }
     
     // Find and mark animation as not running - even if paused
-    for (auto& anim : active_animations) {
+    auto& led_animation_list = led_animations[ledId];
+    for (auto& anim : led_animation_list) {
         if (anim.ledId == ledId && anim.running) {
             anim.running = false;
             anim.animation_paused = false; // Clear pause state to ensure proper removal
@@ -498,8 +525,8 @@ esp_err_t LEDManager::stopAnimation(LEDId ledId)
         }
     }
     
-    // Release the mutex
-    xSemaphoreGive(animation_mutex);
+    // Release the LED-specific mutex
+    xSemaphoreGive(mutex_it->second);
     
     // Reset LED animation state
     it->second.animation_running = false;
@@ -513,7 +540,7 @@ esp_err_t LEDManager::stopAnimation(LEDId ledId)
 void LEDManager::animationManagerTask(void* arg)
 {
     LEDManager* manager = static_cast<LEDManager*>(arg);
-    const uint32_t frame_time_ms = 10; // 100fps update rate for smoother animations
+    const uint32_t frame_time_ms = 20; // 50fps update rate - good balance between smoothness and performance
     
     ESP_LOGI(manager->TAG, "Animation manager task started");
     
@@ -562,16 +589,17 @@ void LEDManager::updateAnimations()
     // Get current time for this frame
     uint32_t current_time_ms = getCurrentTimeMs();
     
-    // Take the mutex to protect animation state
-    if (xSemaphoreTake(animation_mutex, pdMS_TO_TICKS(10)) != pdTRUE) {
-        ESP_LOGW(TAG, "Failed to take animation mutex, skipping animation frame");
-        return;
+    // Check if any LED has active animations
+    bool has_animations = false;
+    for (const auto& animations_pair : led_animations) {
+        if (!animations_pair.second.empty()) {
+            has_animations = true;
+            break;
+        }
     }
     
-    // Handle empty animation list quickly
-    if (active_animations.empty()) {
-        xSemaphoreGive(animation_mutex);
-        
+    // If no animations are running, suspend the task
+    if (!has_animations) {
         // Suspend the task if there are no animations
         if (xSemaphoreTake(task_control_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             if (!task_suspended) {
@@ -589,71 +617,119 @@ void LEDManager::updateAnimations()
         return;
     }
     
-    // Iterate through all active animations
-    for (auto it = active_animations.begin(); it != active_animations.end(); ) {
-        AnimationState& anim = *it;
+    // Process animations for each LED independently
+    for (auto& led_anim_pair : led_animations) {
+        LEDId ledId = led_anim_pair.first;
+        auto& animations = led_anim_pair.second;
         
-        if (!anim.running) {
-            // Animation was stopped, remove it
-            ESP_LOGI(TAG, "Removing stopped animation for LED %s (was %s)",
-                    ledIdToString(anim.ledId),
-                    anim.animation_paused ? "paused" : "running");
-            
-            // Make sure the animation is truly removed regardless of pause state
-            it = active_animations.erase(it);
+        // Skip LEDs with no animations
+        if (animations.empty()) {
             continue;
         }
         
-        // Update based on animation type
-        if (anim.type == AnimationType::BREATHING) {
-            updateBreathingAnimation(anim, current_time_ms);
+        // Take the mutex for this specific LED
+        auto mutex_it = animation_mutexes.find(ledId);
+        if (mutex_it == animation_mutexes.end() || mutex_it->second == nullptr) {
+            ESP_LOGW(TAG, "Animation mutex for LED %s not found, skipping", ledIdToString(ledId));
+            continue;
         }
         
-        // Check if animation has completed all repeats (but only if not infinite)
-        if (anim.config.repeat_count > 0 && anim.repeat_count >= anim.config.repeat_count) {
-            // Animation complete, remove it
-            ESP_LOGI(TAG, "Animation complete for LED %s after %lu cycles", 
-                     ledIdToString(anim.ledId), anim.repeat_count);
+        // Try to take the mutex with a short timeout
+        if (xSemaphoreTake(mutex_it->second, pdMS_TO_TICKS(5)) != pdTRUE) {
+            // If we can't get the mutex quickly, skip this LED for this frame
+            ESP_LOGD(TAG, "Mutex for LED %s busy, skipping animation frame", ledIdToString(ledId));
+            continue;
+        }
+        
+        // Iterate through all animations for this LED
+        for (auto it = animations.begin(); it != animations.end(); ) {
+            AnimationState& anim = *it;
             
-            // Update the LEDInfo
-            auto led_it = leds.find(anim.ledId);
-            if (led_it != leds.end()) {
-                led_it->second.current_animation = AnimationType::NONE;
-                led_it->second.animation_running = false;
+            if (!anim.running) {
+                // Animation was stopped, remove it
+                ESP_LOGI(TAG, "Removing stopped animation for LED %s (was %s)",
+                        ledIdToString(anim.ledId),
+                        anim.animation_paused ? "paused" : "running");
                 
-                // Use the animation's stored initial color to ensure color persistence
-                // This ensures the LED maintains the correct color regardless of timing
-                HSV finalColor = anim.initial_color;
-                finalColor.v = 100; // Full brightness
-                
-                ESP_LOGD(TAG, "Animation ending, restoring to initial color H:%u S:%u at full brightness",
-                         finalColor.h, finalColor.s);
-                
-                // Set the LED to the final color at full brightness
-                setHSV(anim.ledId, finalColor);
-                
-                ESP_LOGD(TAG, "Restored LED %s to full brightness with hue %u",
-                         ledIdToString(anim.ledId), finalColor.h);
+                it = animations.erase(it);
+                continue;
             }
             
-            it = active_animations.erase(it);
-        } else {
-            ++it;
+            // Update based on animation type with color calculation (but not application yet)
+            HSV calculatedColor;
+            bool needColorUpdate = false;
+            
+            if (anim.type == AnimationType::BREATHING) {
+                needColorUpdate = updateBreathingAnimation(anim, current_time_ms, calculatedColor);
+            }
+            
+            // Store the calculation result to apply after releasing the mutex
+            if (needColorUpdate) {
+                it->calculatedColor = calculatedColor;
+                it->needsUpdate = true;
+            }
+            
+            // Check if animation has completed all repeats (but only if not infinite)
+            if (anim.config.repeat_count > 0 && anim.repeat_count >= anim.config.repeat_count) {
+                // Animation complete, remove it
+                ESP_LOGI(TAG, "Animation complete for LED %s after %lu cycles", 
+                         ledIdToString(anim.ledId), anim.repeat_count);
+                
+                // Update the LEDInfo
+                auto led_it = leds.find(anim.ledId);
+                if (led_it != leds.end()) {
+                    led_it->second.current_animation = AnimationType::NONE;
+                    led_it->second.animation_running = false;
+                    
+                    // Use the animation's stored initial color to ensure color persistence
+                    HSV finalColor = anim.initial_color;
+                    finalColor.v = 100; // Full brightness
+                    
+                    ESP_LOGD(TAG, "Animation ending, restoring to initial color H:%u S:%u at full brightness",
+                             finalColor.h, finalColor.s);
+                    
+                    // Set the LED to the final color at full brightness
+                    setHSV(anim.ledId, finalColor);
+                    
+                    ESP_LOGD(TAG, "Restored LED %s to full brightness with hue %u",
+                             ledIdToString(anim.ledId), finalColor.h);
+                }
+                
+                it = animations.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        
+        // Keep track of which animations need color updates
+        std::vector<AnimationState*> animations_needing_update;
+        for (auto& anim : animations) {
+            if (anim.needsUpdate) {
+                animations_needing_update.push_back(&anim);
+            }
+        }
+        
+        // Release the LED-specific mutex
+        xSemaphoreGive(mutex_it->second);
+        
+        // Apply any color updates AFTER releasing the mutex
+        // This prevents deadlocks when setHSV tries to take the same mutex
+        for (auto anim_ptr : animations_needing_update) {
+            setRGB(anim_ptr->ledId, hsvToRgb(anim_ptr->calculatedColor));
+            anim_ptr->needsUpdate = false;
         }
     }
-    
-    // Release the mutex
-    xSemaphoreGive(animation_mutex);
 }
 
 // Update a breathing animation state
-void LEDManager::updateBreathingAnimation(AnimationState& anim, uint32_t current_time_ms)
+// Returns true if a color update is needed, along with the calculated color
+bool LEDManager::updateBreathingAnimation(AnimationState& anim, uint32_t current_time_ms, HSV& resultColor)
 {
     // Get elapsed time since last update
     uint32_t elapsed_ms = current_time_ms - anim.last_update_ms;
     if (elapsed_ms < 10) {
         // Not time to update yet (need at least 10ms between updates for smooth animation)
-        return;
+        return false;
     }
     
     // Update timestamp
@@ -674,18 +750,15 @@ void LEDManager::updateBreathingAnimation(AnimationState& anim, uint32_t current
             ESP_LOGI(TAG, "Resuming animation after color preview pause with hue %u", anim.initial_color.h);
         } else {
             // Still in preview mode - keep the LED at full brightness with the new color
-            LEDManager::HSV previewColor = anim.initial_color;
-            previewColor.v = 100; // Full brightness for preview
-            
-            // Apply the preview color 
-            setHSV(anim.ledId, previewColor);
+            resultColor = anim.initial_color;
+            resultColor.v = 100; // Full brightness for preview
             
             // Log periodic updates while paused (only every 100ms to avoid spam)
             if (current_time_ms % 100 == 0) {
                 ESP_LOGD(TAG, "Paused at full brightness, time remaining: %lu ms", 
                          anim.pause_until_ms - current_time_ms);
             }
-            return; // Skip the rest of the animation update
+            return true; // Need to update with preview color
         }
     }
     
@@ -697,13 +770,11 @@ void LEDManager::updateBreathingAnimation(AnimationState& anim, uint32_t current
         anim.pause_until_ms = current_time_ms + 300; // Show preview for 300ms
         
         // Show preview at full brightness
-        LEDManager::HSV previewColor = anim.initial_color;
-        previewColor.v = 100; // Full brightness for preview
+        resultColor = anim.initial_color;
+        resultColor.v = 100; // Full brightness for preview
         
-        // Apply the preview color and skip the rest of the animation
-        setHSV(anim.ledId, previewColor);
-        ESP_LOGI(TAG, "Starting color preview pause for 300ms with hue %u", previewColor.h);
-        return;
+        ESP_LOGI(TAG, "Starting color preview pause for 300ms with hue %u", resultColor.h);
+        return true; // Need to update with preview color
     }
     
     // Normal animation processing (not paused and not just updated)
@@ -731,7 +802,6 @@ void LEDManager::updateBreathingAnimation(AnimationState& anim, uint32_t current
         float fade_ratio = 1.0f - (time_since_resume / 100.0f);
         // Start from a higher brightness and gradually transition to the normal animation curve
         brightness = static_cast<uint8_t>(100.0f * (fade_ratio + (1.0f - fade_ratio) * sin_value * sin_value));
-        ESP_LOGD(TAG, "Fading in animation after pause: %u%%", brightness);
     } else {
         // Normal animation curve
         brightness = static_cast<uint8_t>(100.0f * sin_value * sin_value);
@@ -744,18 +814,8 @@ void LEDManager::updateBreathingAnimation(AnimationState& anim, uint32_t current
     }
     
     // Use the initial HSV color, only updating the brightness component
-    LEDManager::HSV color = anim.initial_color;
-    color.v = brightness;
-
-    // Apply the new color (this will update the RGB values in the LED info)
-    setHSV(anim.ledId, color);
-    
-    // Only log at major brightness changes to reduce log spam
-    if (anim.current_brightness / 10 != brightness / 10) {
-        ESP_LOGD(TAG, "LED %s breathing brightness: %u%% for hue %u", 
-                 ledIdToString(anim.ledId), brightness, color.h);
-        anim.current_brightness = brightness;
-    }
+    resultColor = anim.initial_color;
+    resultColor.v = brightness;
     
     // Update cycle counter if needed
     if (completed_cycle) {
@@ -769,27 +829,26 @@ void LEDManager::updateBreathingAnimation(AnimationState& anim, uint32_t current
                 led_it->second.current_hsv.s != anim.initial_color.s) {
                 
                 // Mismatch found - update the LED's stored color to match the animation
-                ESP_LOGD(TAG, "Color mismatch at cycle boundary - refreshing from H:%u to H:%u", 
-                         led_it->second.current_hsv.h, anim.initial_color.h);
-                         
                 // Only update tracking, not actual color since we're in the animation
                 led_it->second.current_hsv.h = anim.initial_color.h;
                 led_it->second.current_hsv.s = anim.initial_color.s;
             }
         }
         
-        // Log more details when cycle completes to verify color persistence
-        ESP_LOGD(TAG, "LED %s breathing cycle %lu completed - using color H:%u S:%u V:%u", 
-                 ledIdToString(anim.ledId), anim.repeat_count, color.h, color.s, color.v);
+        // // Log more details when cycle completes to verify color persistence
+        // ESP_LOGD(TAG, "LED %s breathing cycle %lu completed - using color H:%u S:%u V:%u", 
+        //          ledIdToString(anim.ledId), anim.repeat_count, resultColor.h, resultColor.s, resultColor.v);
         
-        // In continuous mode, we don't need to log every single cycle
-        if (anim.repeat_count % 10 == 0 || anim.config.repeat_count > 0) {
-            ESP_LOGD(TAG, "Breathing cycle %lu/%lu completed for LED %s", 
-                     anim.repeat_count, 
-                     anim.config.repeat_count > 0 ? anim.config.repeat_count : 0,
-                     ledIdToString(anim.ledId));
-        }
+        // // In continuous mode, we don't need to log every single cycle
+        // if (anim.repeat_count % 10 == 0 || anim.config.repeat_count > 0) {
+        //     ESP_LOGD(TAG, "Breathing cycle %lu/%lu completed for LED %s", 
+        //              anim.repeat_count, 
+        //              anim.config.repeat_count > 0 ? anim.config.repeat_count : 0,
+        //              ledIdToString(anim.ledId));
+        // }
     }
+    
+    return true; // Need to update with calculated color
 }
 
 LEDManager::RGB LEDManager::hsvToRgb(const HSV& hsv)
@@ -904,10 +963,10 @@ LEDManager::HSV LEDManager::rgbToHsv(const RGB& rgb)
 const char* LEDManager::ledIdToString(LEDId id)
 {
     switch (id) {
-        case LEDId::ENCODER_RGB:
-            return "ENCODER_RGB";
-        case LEDId::STATUS_RGB:
-            return "STATUS_RGB";
+        case LEDId::ENCODER_A_RGB:
+            return "ENCODER_A_RGB";
+        case LEDId::ENCODER_B_RGB:
+            return "ENCODER_B_RGB";
         default:
             return "UNKNOWN_LED";
     }

@@ -68,8 +68,8 @@ public:
      * @brief LED identifier enum for type-safe LED identification
      */
     enum class LEDId {
-        ENCODER_RGB,
-        STATUS_RGB,
+        ENCODER_A_RGB,  // RGB LED for Encoder A
+        ENCODER_B_RGB,  // RGB LED for Encoder B
         // Add new LEDs here
     };
     
@@ -217,6 +217,8 @@ private:
         uint32_t color_update_time;  // Time when color was last updated
         bool animation_paused;       // Flag to pause animation during color selection
         uint32_t pause_until_ms;     // Time until animation should resume
+        HSV calculatedColor;         // The color calculated during the latest update
+        bool needsUpdate;            // Flag indicating the color needs to be updated
     };
     
     // LED related storage
@@ -236,20 +238,23 @@ private:
     static void animationManagerTask(void* arg);
     TaskHandle_t animation_manager_task;
     bool animation_manager_running;
-    SemaphoreHandle_t animation_mutex;
+    
+    // Animation mutexes - one per LED to avoid contention
+    std::map<LEDId, SemaphoreHandle_t> animation_mutexes;
     
     // Task suspension control
     SemaphoreHandle_t task_control_mutex;
     bool task_suspended;
     
-    // Active animations
-    std::vector<AnimationState> active_animations;
+    // Active animations - separated by LED to reduce contention
+    std::map<LEDId, std::vector<AnimationState>> led_animations;
     
     // Update all animations in one frame
     void updateAnimations();
     
     // Update a specific breathing animation
-    void updateBreathingAnimation(AnimationState& anim, uint32_t current_time_ms);
+    // Returns true if a color update is needed, along with the calculated color
+    bool updateBreathingAnimation(AnimationState& anim, uint32_t current_time_ms, HSV& resultColor);
     
     // Helper to get current time in ms
     inline uint32_t getCurrentTimeMs() {
