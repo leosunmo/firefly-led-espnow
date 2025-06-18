@@ -178,7 +178,9 @@ void Receiver::recvLoop(void *pvParameter) {
                 lastKeepaliveTime = xTaskGetTickCount() * portTICK_PERIOD_MS;
                 
                 if (!isRegistered) {
-                    ESP_LOGI(TAG, "Received unicast message, setting isRegistered to true");
+                    ESP_LOGI(TAG, "Received unicast message but not registered yet. Sending StateRequest.");
+                    // Send a StateRequest to the sender to request current state
+                    sendStateRequest(recvMsg->src_mac);
                     isRegistered = true;
                 }
             }
@@ -232,6 +234,9 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
         case PayloadType::Keepalive:
             expectedPayloadSize = 0; // Keepalive has no additional payload
             break;
+        case PayloadType::StateRequest:
+            expectedPayloadSize = 0; // StateRequest has no additional payload
+            break;
         default:
             ESP_LOGE(TAG, "Unhandled payload type in switch: %d", static_cast<int>(payloadType));
             return -1;
@@ -277,9 +282,11 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
     auto seqNumIt = peerLastSequenceNumbers.find(peerKey);
     bool isNewPeer = (seqNumIt == peerLastSequenceNumbers.end());
     
-    // If it's a new peer or we're handling RegistrationSuccessful, accept any sequence number
-    if (isNewPeer || payloadType == PayloadType::RegistrationSuccessful) {
-        ESP_LOGI(TAG, "New peer or registration message, accepting seq_num=%d", rawMessage->seq_num);
+    // If it's a new peer or we're handling control messages that can reset sequence, accept any sequence number
+    if (isNewPeer || 
+        payloadType == PayloadType::RegistrationSuccessful || 
+        payloadType == PayloadType::StateRequest) {
+        ESP_LOGI(TAG, "New peer or control message, accepting seq_num=%d", rawMessage->seq_num);
         peerLastSequenceNumbers[peerKey] = rawMessage->seq_num;
     } else {
         uint16_t lastSeqNum = seqNumIt->second;
@@ -291,9 +298,10 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
             peerLastSequenceNumbers[peerKey] = rawMessage->seq_num;
             ESP_LOGD(TAG, "Valid sequence: prev=%d, current=%d", lastSeqNum, rawMessage->seq_num);
         } else {
-            // Special case: if sequence starts from 0/1, it could be a restarted sender
-            if (rawMessage->seq_num <= 1 && lastSeqNum > 100) {
-                ESP_LOGI(TAG, "Detected sender restart: prev=%d, current=%d. Accepting message.", 
+            // Special case: if sequence number is significantly lower than last seen, 
+            // it could be a restarted sender. Be more lenient with this detection.
+            if (rawMessage->seq_num < lastSeqNum && (lastSeqNum - rawMessage->seq_num) > 50) {
+                ESP_LOGI(TAG, "Detected possible sender restart: prev=%d, current=%d. Accepting message.", 
                         lastSeqNum, rawMessage->seq_num);
                 peerLastSequenceNumbers[peerKey] = rawMessage->seq_num;
             } else {
@@ -348,7 +356,8 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
             }
             ChangeHuePayload payload;
             payload.index = rawMessage->payload[0]; // First byte is the index
-            payload.hueVal = (rawMessage->payload[1] << 8) | rawMessage->payload[2]; // Next two bytes are the hue value
+            // Fix byte order to match serialization (low byte first, then high byte)
+            payload.hueVal = rawMessage->payload[1] | (rawMessage->payload[2] << 8); 
             message->parsed_payload = payload;
             break;
         }
@@ -371,6 +380,12 @@ int Receiver::parseESPNOWData(const uint8_t *data, uint16_t data_len, const uint
         case PayloadType::Keepalive: {
             // Keepalive doesn't need payload data
             KeepalivePayload payload;
+            message->parsed_payload = payload;
+            break;
+        }
+        case PayloadType::StateRequest: {
+            // StateRequest doesn't need payload data
+            StateRequestPayload payload;
             message->parsed_payload = payload;
             break;
         }
@@ -455,5 +470,27 @@ void Receiver::checkKeepalive(void *pvParameter) {
         }
 
         vTaskDelay(1000 / portTICK_PERIOD_MS); // Check every second
+    }
+}
+
+// Send a StateRequest to request current settings from the sender
+void Receiver::sendStateRequest(const uint8_t* destMac) {
+    if (!destMac) {
+        ESP_LOGE(TAG, "Cannot send state request to null MAC address");
+        return;
+    }
+    
+    // Create a StateRequest message
+    MessageData stateRequest = {};
+    stateRequest.seq_num = 0; // Sequence number doesn't matter for this request
+    stateRequest.payload_type = static_cast<uint8_t>(PayloadType::StateRequest);
+    stateRequest.crc = 0; // CRC will be calculated by the sender
+    
+    // Send the state request
+    esp_err_t result = esp_now_send(destMac, reinterpret_cast<uint8_t *>(&stateRequest), sizeof(stateRequest));
+    if (result == ESP_OK) {
+        ESP_LOGI(TAG, "Sent state request to MAC=" MACSTR, MAC2STR(destMac));
+    } else {
+        ESP_LOGE(TAG, "Failed to send state request: %s", esp_err_to_name(result));
     }
 }

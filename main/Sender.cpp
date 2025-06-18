@@ -34,7 +34,8 @@ void Sender::sendPatternChange(PatternType patternType, const uint8_t* destMac) 
     ChangePatternPayload payload;
     payload.patternType = patternType;
     sendPayload(payload, PayloadType::ChangePattern, destMac);
-    ESP_LOGI(TAG, "Sent pattern change: %d", static_cast<int>(patternType));
+    ESP_LOGI(TAG, "Sent pattern change: %s (index: %d)", 
+            getPatternName(patternType), static_cast<int>(patternType));
 }
 
 void Sender::sendHueChange(uint8_t index, uint16_t hue, const uint8_t* destMac) {
@@ -68,8 +69,65 @@ void Sender::sendEffectPunch(uint8_t intensity, const uint8_t* destMac) {
 
 void Sender::sendKeepaliveMessage(const uint8_t* destMac) {
     KeepalivePayload payload;
-    sendPayload(payload, PayloadType::Keepalive, destMac);
-    ESP_LOGI(TAG, "Sent keepalive message");
+    
+    // If destMac is provided, send to that specific peer
+    if (destMac) {
+        sendPayload(payload, PayloadType::Keepalive, destMac);
+        ESP_LOGI(TAG, "Sent keepalive message to specific peer");
+    } else {
+        // For broadcast keepalives, use the special method to ensure proper sequence numbers
+        std::vector<uint8_t> serializedPayload = PayloadHelper::serialize(payload);
+        sendToAllPeers(serializedPayload.data(), serializedPayload.size(), PayloadType::Keepalive);
+        ESP_LOGI(TAG, "Sent keepalive message to all peers");
+    }
+}
+
+void Sender::sendCurrentSettings(const uint8_t* destMac) {
+    if (!destMac) {
+        ESP_LOGE(TAG, "Cannot send current settings to null MAC address");
+        return;
+    }
+    
+    ESP_LOGI(TAG, "Sending all current settings to newly connected peer: " MACSTR, MAC2STR(destMac));
+    
+    // Get all current input states from InputManager
+    InputManager& inputManager = InputManager::getInstance();
+    
+    // 1. Send current active pattern
+    PatternType currentPattern = inputManager.getActivePattern();
+    sendPatternChange(currentPattern, destMac);
+    
+    // 2. Send current brightness level
+    float brightnessPercentage = inputManager.getPotPercentage(PotentiometerId::BRIGHTNESS_POT);
+    if (brightnessPercentage >= 0) {
+        sendBrightnessChange(static_cast<uint8_t>(brightnessPercentage), destMac);
+    }
+    
+    // 3. Send current speed level
+    float speedPercentage = inputManager.getPotPercentage(PotentiometerId::SPEED_POT);
+    if (speedPercentage >= 0) {
+        sendSpeedChange(static_cast<uint8_t>(speedPercentage), destMac);
+    }
+    
+    // 4. If encoders are enabled, send current hue values
+    if (inputManager.areEncodersEnabled()) {
+        // For CHROMA_WAVE pattern, we need to send both encoder hues
+        LEDManager& ledManager = LEDManager::getInstance();
+        
+        // Get encoder A hue (primary/index 1)
+        auto hueA = ledManager.getCurrentColorHSV(LEDManager::LEDId::ENCODER_A_RGB);
+        if (hueA.v > 0) { // Only send if the LED is active
+            sendHueChange(1, hueA.h, destMac);
+        }
+        
+        // Get encoder B hue (secondary/index 0)
+        auto hueB = ledManager.getCurrentColorHSV(LEDManager::LEDId::ENCODER_B_RGB);
+        if (hueB.v > 0) { // Only send if the LED is active
+            sendHueChange(0, hueB.h, destMac);
+        }
+    }
+    
+    ESP_LOGI(TAG, "Finished sending all current settings to peer");
 }
 
 void Sender::sendRegistrationResponse(const uint8_t* destMac) {
@@ -163,10 +221,19 @@ uint16_t Sender::getNextSequenceNumber(const uint8_t *mac_addr) {
     if (peerSequenceNumbers.find(peerKey) == peerSequenceNumbers.end()) {
         // Initialize the sequence number for this MAC address
         peerSequenceNumbers[peerKey] = 0;
+        ESP_LOGD(TAG, "Initialized sequence number for peer " MACSTR " to 0", MAC2STR(mac_addr));
     }
 
     // Increment and return the next sequence number, wrapping around at 255
-    peerSequenceNumbers[peerKey] = (peerSequenceNumbers[peerKey] + 1) % 256;
+    uint16_t current = peerSequenceNumbers[peerKey];
+    peerSequenceNumbers[peerKey] = (current + 1) % 256;
+    
+    // Log the sequence number for debugging
+    if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+        ESP_LOGD(TAG, "Next sequence number for peer " MACSTR ": %d (was %d)", 
+                 MAC2STR(mac_addr), peerSequenceNumbers[peerKey], current);
+    }
+    
     return peerSequenceNumbers[peerKey];
 }
 
@@ -231,13 +298,57 @@ void Sender::recvCallback(const esp_now_recv_info_t *recv_info, const uint8_t *d
                 }
             } else {
                 ESP_LOGI(TAG, "Peer already registered: MAC=" MACSTR, MAC2STR(recv_info->src_addr));
-                // Reset failed send count as we got a message from this peer
-                std::string peerKey(reinterpret_cast<const char *>(recv_info->src_addr), ESP_NOW_ETH_ALEN);
-                peerFailedSend[peerKey] = 0;
             }
             
+            // Reset sequence number for this peer
+            std::string peerKey(reinterpret_cast<const char *>(recv_info->src_addr), ESP_NOW_ETH_ALEN);
+            peerSequenceNumbers[peerKey] = 0;
+            ESP_LOGI(TAG, "Reset sequence number for peer: " MACSTR, MAC2STR(recv_info->src_addr));
+            
+            // Reset failed send count
+            peerFailedSend[peerKey] = 0;
+            
+           
             // Always send registration response regardless of whether the peer is new or existing
             Sender::getInstance().sendRegistrationResponse(recv_info->src_addr);
+            
+            // Send all current settings to the newly connected peer
+            Sender::getInstance().sendCurrentSettings(recv_info->src_addr);
+            break;
+        }
+        
+        case PayloadType::StateRequest: {
+            ESP_LOGI(TAG, "Received State Request from MAC=" MACSTR, MAC2STR(recv_info->src_addr));
+            
+            // Ensure the peer is registered
+            if (!esp_now_is_peer_exist(recv_info->src_addr)) {
+                ESP_LOGI(TAG, "Peer not registered yet, adding: MAC=" MACSTR, MAC2STR(recv_info->src_addr));
+                esp_now_peer_info_t peerInfo = {};
+                peerInfo.channel = CONFIG_ESPNOW_CHANNEL;
+                peerInfo.ifidx = static_cast<wifi_interface_t>(ESPNOW_WIFI_IF);
+                peerInfo.encrypt = false;
+                std::memcpy(peerInfo.peer_addr, recv_info->src_addr, ESP_NOW_ETH_ALEN);
+
+                if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to add peer: MAC=" MACSTR, MAC2STR(recv_info->src_addr));
+                    break;
+                }
+            }
+            
+            // Create a key for this peer
+            std::string peerKey(reinterpret_cast<const char *>(recv_info->src_addr), ESP_NOW_ETH_ALEN);
+            
+            // Reset sequence number for this peer
+            // This is important to prevent sequence number mismatch issues
+            peerSequenceNumbers[peerKey] = 0;
+            ESP_LOGI(TAG, "Reset sequence number for peer: " MACSTR, MAC2STR(recv_info->src_addr));
+            
+            // Reset failed send count
+            peerFailedSend[peerKey] = 0;
+            
+            // Send registration response and current settings
+            Sender::getInstance().sendRegistrationResponse(recv_info->src_addr);
+            Sender::getInstance().sendCurrentSettings(recv_info->src_addr);
             break;
         }
 
@@ -277,20 +388,29 @@ void Sender::processOutgoingMessages(void *pvParameter) {
                 continue;
             }
 
-            // Get number of peers registered
-            esp_err_t result = esp_now_send(nullptr, sendParams->raw_data, sendParams->data_len);
+            // If we're sending to a specific peer, use that MAC address
+            const uint8_t* dest_mac = nullptr;
+            if (sendParams->dest_mac[0] != 0 || sendParams->dest_mac[1] != 0) {
+                dest_mac = sendParams->dest_mac;
+            }
+            
+            // Send the message
+            esp_err_t result = esp_now_send(dest_mac, sendParams->raw_data, sendParams->data_len);
             if (result == ESP_OK) {
-                ESP_LOGI(TAG, "Message sent successfully to %d receivers", peerCount.total_num);
+                ESP_LOGI(TAG, "Message sent successfully to %s", 
+                         dest_mac ? "specific peer" : "all registered peers");
             } else {
                 ESP_LOGE(TAG, "Failed to send message error=%s", esp_err_to_name(result));
-                // Increment failed send count for this peer
-                std::string peerKey(reinterpret_cast<const char *>(sendParams->dest_mac), ESP_NOW_ETH_ALEN);
-                peerFailedSend[peerKey]++;
-                ESP_LOGD(TAG, "Failed sends for peer " MACSTR ": %d", MAC2STR(sendParams->dest_mac), peerFailedSend[peerKey]);
-                if (peerFailedSend[peerKey] >= ESPNOW_MAX_PEER_FAIL) {
-                    ESP_LOGW(TAG, "Dropping peer " MACSTR " due to too many failed sends", MAC2STR(sendParams->dest_mac));
-                    esp_now_del_peer(sendParams->dest_mac);
-                    peerFailedSend.erase(peerKey); // Remove from failed sends
+                if (dest_mac) {
+                    // Increment failed send count for this peer
+                    std::string peerKey(reinterpret_cast<const char *>(sendParams->dest_mac), ESP_NOW_ETH_ALEN);
+                    peerFailedSend[peerKey]++;
+                    ESP_LOGD(TAG, "Failed sends for peer " MACSTR ": %d", MAC2STR(sendParams->dest_mac), peerFailedSend[peerKey]);
+                    if (peerFailedSend[peerKey] >= ESPNOW_MAX_PEER_FAIL) {
+                        ESP_LOGW(TAG, "Dropping peer " MACSTR " due to too many failed sends", MAC2STR(sendParams->dest_mac));
+                        esp_now_del_peer(sendParams->dest_mac);
+                        peerFailedSend.erase(peerKey); // Remove from failed sends
+                    }
                 }
             }
 
@@ -319,8 +439,25 @@ void Sender::prepareSendParams(SendParams &sendParams, const uint8_t *payload, s
         return;
     }
 
+    // If dest_mac is null, we're sending to all peers, so we need to use a special sequence number
+    uint16_t seq_num = 0;
+    if (sendParams.dest_mac[0] == 0 && sendParams.dest_mac[1] == 0) {
+        // When dest_mac is empty, esp_now_send will send individually to each registered peer
+        // Each peer needs its own sequence number - but this should rarely happen now
+        // since we use sendToAllPeers for broadcasting
+        
+        // Generate a sequence number for a null MAC (common counter for broadcast-style operations)
+        seq_num = getNextSequenceNumber(broadcastMac);
+        ESP_LOGW(TAG, "Using fallback broadcast sequence number: %d - This path should rarely be taken!", seq_num);
+    } else {
+        // Specific peer, use its sequence counter
+        seq_num = getNextSequenceNumber(sendParams.dest_mac);
+        ESP_LOGI(TAG, "Preparing message for peer " MACSTR " with sequence number %d and payload type %d", 
+                 MAC2STR(sendParams.dest_mac), seq_num, static_cast<int>(payload_type));
+    }
+
     // Initialize the fixed fields of MessageData
-    messageData->seq_num = getNextSequenceNumber(sendParams.dest_mac);
+    messageData->seq_num = seq_num;
     messageData->payload_type = static_cast<uint8_t>(payload_type);
 
     ESP_LOGD(TAG, "Preparing to send payload type: %d", messageData->payload_type);
@@ -415,4 +552,55 @@ void Sender::logRegisteredPeers() {
             }
         }
     }
+}
+
+bool Sender::sendToAllPeers(const uint8_t* payload, size_t payload_len, PayloadType payload_type) {
+    esp_now_peer_num_t peerCount = {};
+    esp_now_get_peer_num(&peerCount);
+    
+    if (peerCount.total_num == 0) {
+        ESP_LOGW(TAG, "No registered peers to send to");
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "Sending to all %d registered peers with individual sequence numbers using queue", peerCount.total_num);
+    
+    bool allQueued = true;
+    esp_now_peer_info_t peerInfo = {};
+    
+    // Reset the peer fetch context to fetch peers from the beginning
+    for (int i = 0; i < peerCount.total_num; i++) {
+        if (esp_now_fetch_peer(i == 0, &peerInfo) == ESP_OK) {
+            // Create a new SendParams object for this peer
+            auto* params = new SendParams;
+            if (!params) {
+                ESP_LOGE(TAG, "Failed to allocate memory for SendParams");
+                allQueued = false;
+                continue;
+            }
+            
+            // Copy the peer's MAC address
+            std::memcpy(params->dest_mac, peerInfo.peer_addr, ESP_NOW_ETH_ALEN);
+            
+            // Prepare the send parameters with the correct sequence number for this peer
+            prepareSendParams(*params, payload, payload_len, payload_type);
+            
+            ESP_LOGD(TAG, "Queuing message to peer " MACSTR " with payload type %d", 
+                    MAC2STR(peerInfo.peer_addr), static_cast<int>(payload_type));
+            
+            // Add to the outgoing message queue
+            if (xQueueSend(outgoingMessageQueue, &params, portMAX_DELAY) != pdTRUE) {
+                ESP_LOGE(TAG, "Failed to queue message for peer " MACSTR, MAC2STR(peerInfo.peer_addr));
+                delete params;
+                allQueued = false;
+            } else {
+                ESP_LOGD(TAG, "Successfully queued message to peer " MACSTR, MAC2STR(peerInfo.peer_addr));
+            }
+        } else {
+            ESP_LOGE(TAG, "Failed to fetch info for peer %d", i);
+            allQueued = false;
+        }
+    }
+    
+    return allQueued;
 }

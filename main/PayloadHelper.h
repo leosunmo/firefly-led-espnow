@@ -34,7 +34,7 @@ public:
         if (data && len > 0) {
             payload.patternType = static_cast<PatternType>(data[0]);
         } else {
-            payload.patternType = PatternType::NoPattern;
+            payload.patternType = PatternType::NONE;
         }
         return payload;
     }

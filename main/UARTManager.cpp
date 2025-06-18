@@ -95,6 +95,7 @@ void UARTManager::sendBrightnessCommand(uint8_t brightness) {
 
 void UARTManager::sendPatternCommand(PatternType pattern) {
     uint32_t patternValue = static_cast<uint32_t>(pattern);
+    ESP_LOGI(TAG, "Sending pattern: %s (index: %lu)", getPatternName(pattern), patternValue);
     sendMessage(CommandType::PATTERN, patternValue);
 }
 
@@ -108,10 +109,12 @@ void UARTManager::sendDebugMessage(uint32_t value) {
 
 void UARTManager::sendHueCommand(uint8_t index, uint16_t hue) {
     // Pack the index and hue value into a single uint32_t
-    // index in the most significant byte, hue in the lower 16 bits
+    // index in the upper 16 bits, hue in the lower 16 bits
     uint32_t packedValue = (static_cast<uint32_t>(index) << 16) | static_cast<uint32_t>(hue);
     sendMessage(CommandType::HUE, packedValue);
-    ESP_LOGI(TAG, "Sent hue command: index=%d, hue=%d°", index, hue);
+    float hueNormalized = static_cast<float>(hue) / 360.0f;
+    ESP_LOGI(TAG, "Sent hue command: index=%d, hue=%d° (normalized: %.4f, packed: 0x%08lX)", 
+             index, hue, hueNormalized, static_cast<unsigned long>(packedValue));
 }
 
 void UARTManager::sendPunchCommand(uint8_t intensity) {
@@ -130,7 +133,8 @@ void UARTManager::processESPNOWMessage(const Message* message) {
         case PayloadType::ChangePattern: {
             const ChangePatternPayload& payload = std::get<ChangePatternPayload>(message->parsed_payload);
             PatternType patternType = payload.patternType;
-            ESP_LOGI(TAG, "Forwarding pattern change to RP2040: pattern=%d", static_cast<int>(patternType));
+            ESP_LOGI(TAG, "Forwarding pattern change to RP2040: %s (index: %d)", 
+                    getPatternName(patternType), static_cast<int>(patternType));
             sendPatternCommand(patternType);
             break;
         }
@@ -145,7 +149,9 @@ void UARTManager::processESPNOWMessage(const Message* message) {
             const ChangeHuePayload& payload = std::get<ChangeHuePayload>(message->parsed_payload);
             uint8_t index = payload.index;
             uint16_t hue = payload.hueVal;
-            ESP_LOGI(TAG, "Forwarding hue change to RP2040: index=%d, hue=%d°", index, hue);
+            float hueNormalized = static_cast<float>(hue) / 360.0f;
+            ESP_LOGI(TAG, "Forwarding hue change to RP2040: index=%d, hue=%d° (normalized: %.4f)", 
+                     index, hue, hueNormalized);
             sendHueCommand(index, hue);
             break;
         }

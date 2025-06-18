@@ -5,8 +5,8 @@
 #define ENCODER_DEBOUNCE_MS 40 // Debounce time in milliseconds for rotary encoder
 
 // Encoder Hue A pins
-#define HUE_A_ENCODER_A_PIN 3
-#define HUE_A_ENCODER_B_PIN 2
+#define HUE_A_ENCODER_A_PIN 18 // 3
+#define HUE_A_ENCODER_B_PIN 19 // 2  
 
 // Encoder Hue A RGB LED configuration
 #define HUE_A_ENCODER_RGB_RED_PIN 23    // GPIO pin for red channel
@@ -14,8 +14,8 @@
 #define HUE_A_ENCODER_RGB_BLUE_PIN 21   // GPIO pin for blue channel
 
 // Encoder Hue B Pins
-#define HUE_B_ENCODER_A_PIN 18
-#define HUE_B_ENCODER_B_PIN 19
+#define HUE_B_ENCODER_A_PIN 3 // 18
+#define HUE_B_ENCODER_B_PIN 2 // 19
 
 // Encoder Hue B RGB LED configuration
 #define HUE_B_ENCODER_RGB_RED_PIN 10    // GPIO pin for red channel
@@ -45,9 +45,15 @@ typedef enum {
 #define I2C_SDA_PIN 6 // Default SDA pin for I2C
 #define I2C_SCL_PIN 7 // Default SCL pin for I2C
 
-// I2C Configuration for TCA6408A GPIO Expander
-#define TCA6408A_I2C_ADDRESS 0x20 // Default I2C address for TCA6408A
-#define TCA6408A_INT_PIN 11      // GPIO pin connected to TCA6408A INT pin (-1 to disable and use polling)
+#define TCA6408A_LOG_LEVEL ESP_LOG_DEBUG // Log level for TCA6408A GPIO expander
+
+// I2C Configuration for button input TCA6408A GPIO Expander
+#define TCA6408A_A_I2C_ADDRESS 0x20 // Default I2C address for TCA6408A
+#define TCA6408A_A_INT_PIN 11      // GPIO pin connected to TCA6408A INT pin (-1 to disable and use polling)
+
+// I2C Configuration for Encoder buttons and Button LED TCA6408A GPIO Expander
+#define TCA6408A_B_I2C_ADDRESS 0x21 // Second address for TCA6408A (address jumper soldered on the back)
+#define TCA6408A_B_INT_PIN 20      // GPIO pin connected to TCA6408A INT pin (-1 to disable and use polling)
 
 // Button Configuration
 #define CONFIG_BUTTON_DEBOUNCE_TIME_MS 20      // Debounce time in ms

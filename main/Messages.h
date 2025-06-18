@@ -11,18 +11,40 @@
 #include "Manager.h"
 #include <string>
 
-// Define pattern types as enums
+// Define pattern types as enums - matching the RP2040 pattern enum
 enum class PatternType : uint8_t {
-    NoPattern = 0,
-    FullBarPattern = 1,
-    FullBarBallPattern = 2,
-    BallPattern = 3,
-    RainbowPattern = 4,
-    FirePattern = 5,
-    SparklePattern = 6,
-    WavePattern = 7,
-    // Add more patterns as needed
+    NONE = 0,
+    CHROMA_WAVE = 1,
+    SHAKEEL_FLASH = 2,
+    SHAKEEL_FLASH_BALL = 3,
+    // BOUNCE = 4,
+    // BOUNCE_SPLIT = 5,
+    // BOUNCE_HIGH_LOW = 6,
+    // SPACE_X = 7,
+    // HEART = 8,
+    // CIRCLES = 9,
+    // RAINDROP = 10,
+    // WIRELESS = 11
 };
+
+// Helper function to get pattern name from pattern type
+inline const char* getPatternName(PatternType type) {
+    switch (type) {
+        case PatternType::NONE:             return "None";
+        case PatternType::CHROMA_WAVE:      return "Chroma Wave";
+        case PatternType::SHAKEEL_FLASH:    return "Shakeel Flash";
+        case PatternType::SHAKEEL_FLASH_BALL: return "Shakeel Flash Ball";
+        // case PatternType::BOUNCE:           return "Bounce";
+        // case PatternType::BOUNCE_SPLIT:     return "Bounce Split";
+        // case PatternType::BOUNCE_HIGH_LOW:  return "Bounce High Low";
+        // case PatternType::SPACE_X:          return "Space X";
+        // case PatternType::HEART:            return "Heart";
+        // case PatternType::CIRCLES:          return "Circles";
+        // case PatternType::RAINDROP:         return "Raindrop";
+        // case PatternType::WIRELESS:         return "Wireless";
+        default:                           return "Unknown";
+    }
+}
 
 // Define the payload types
 struct ChangePatternPayload {
@@ -101,6 +123,14 @@ struct KeepalivePayload {
     }
 }; // Minimal payload for keepalive messages
 
+struct StateRequestPayload {
+    // Serialize the payload into a vector of bytes
+    std::vector<uint8_t> serialize() const {
+        // Empty payload, return minimum required byte
+        return {0};
+    }
+}; // Payload for receiver to request current state from sender
+
 static constexpr uint8_t broadcastMac[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, broadcastMac, ESP_NOW_ETH_ALEN) == 0)
 
@@ -111,7 +141,7 @@ enum {
 };
 
 // Define a variant to hold different payload types
-using Payload = std::variant<EffectPunchPayload, ChangePatternPayload, ChangeBrightnessPayload, ChangeHuePayload, ChangeSpeedPayload, RegisterRequestPayload, RegistrationSuccessfulPayload, KeepalivePayload>;
+using Payload = std::variant<EffectPunchPayload, ChangePatternPayload, ChangeBrightnessPayload, ChangeHuePayload, ChangeSpeedPayload, RegisterRequestPayload, RegistrationSuccessfulPayload, KeepalivePayload, StateRequestPayload>;
 
 enum class PayloadType : uint8_t {
     RegisterPeer,
@@ -122,7 +152,8 @@ enum class PayloadType : uint8_t {
     ChangeSpeed,
     RegisterRequest,
     RegistrationSuccessful,
-    Keepalive
+    Keepalive,
+    StateRequest
 };
 
 // Message contains the payload as well as potentially the parsed payload.

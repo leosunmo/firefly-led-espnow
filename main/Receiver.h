@@ -13,6 +13,7 @@ class Receiver {
 public:
     static void init();
     static void broadcastRegistration(void *pvParameter);
+    static void sendStateRequest(const uint8_t* destMac);
 
 private:
     static void recvCallback(const esp_now_recv_info_t *recv_info, const uint8_t *data, int len);

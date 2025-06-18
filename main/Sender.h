@@ -39,6 +39,12 @@ public:
     void sendEffectPunch(uint8_t intensity, const uint8_t* destMac = nullptr);
     void sendKeepaliveMessage(const uint8_t* destMac = nullptr);
     void sendRegistrationResponse(const uint8_t* destMac);
+    
+    // Send all current settings to a newly connected peer
+    void sendCurrentSettings(const uint8_t* destMac);
+    
+    // Send a message to all registered peers with correct sequence numbers
+    bool sendToAllPeers(const uint8_t* payload, size_t payload_len, PayloadType payload_type);
 
 private:
     // Private constructor and destructor for singleton
@@ -66,15 +72,17 @@ private:
 template<typename T>
 void Sender::sendPayload(const T& payload, PayloadType payloadType, const uint8_t* destMac) {
     std::vector<uint8_t> serializedPayload = PayloadHelper::serialize(payload);
-    auto* params = new SendParams;
     
-    // If destination MAC is provided, copy it to the SendParams
-    if (destMac != nullptr) {
+    // If destMac is nullptr, use the special send-to-all method with proper sequencing
+    if (destMac == nullptr) {
+        sendToAllPeers(serializedPayload.data(), serializedPayload.size(), payloadType);
+    } else {
+        // Otherwise, use the standard message queue approach for a specific peer
+        auto* params = new SendParams;
         std::memcpy(params->dest_mac, destMac, ESP_NOW_ETH_ALEN);
+        prepareSendParams(*params, serializedPayload.data(), serializedPayload.size(), payloadType);
+        xQueueSend(outgoingMessageQueue, &params, portMAX_DELAY);
     }
-    
-    prepareSendParams(*params, serializedPayload.data(), serializedPayload.size(), payloadType);
-    xQueueSend(outgoingMessageQueue, &params, portMAX_DELAY);
 }
 
 #endif // SENDER_H
