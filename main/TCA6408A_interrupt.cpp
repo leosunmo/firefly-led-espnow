@@ -7,15 +7,18 @@ void IRAM_ATTR TCA6408A::isrHandler(void* arg)
     // This is the ISR that gets called when the INT pin changes
     // We need to keep this minimal and just notify the task
     
+    // The arg parameter contains the TCA6408A instance pointer
+    TCA6408A* instance = static_cast<TCA6408A*>(arg);
+    
     // Check if we have a valid instance
-    if (isrInstance_ == nullptr) {
+    if (instance == nullptr) {
         return;
     }
 
     // Signal the interrupt task
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    if (isrInstance_->interruptTaskHandle_ != nullptr) {
-        vTaskNotifyGiveFromISR(isrInstance_->interruptTaskHandle_, &xHigherPriorityTaskWoken);
+    if (instance->interruptTaskHandle_ != nullptr) {
+        vTaskNotifyGiveFromISR(instance->interruptTaskHandle_, &xHigherPriorityTaskWoken);
         if (xHigherPriorityTaskWoken) {
             portYIELD_FROM_ISR();
         }
@@ -25,11 +28,11 @@ void IRAM_ATTR TCA6408A::isrHandler(void* arg)
 esp_err_t TCA6408A::setupInterrupt()
 {
     if (config_.int_pin < 0) {
-        ESP_LOGW(TAG, "No interrupt pin configured");
+        ESP_LOGW(tag_.c_str(), "No interrupt pin configured");
         return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGI(TAG, "Setting up interrupt on GPIO %d", config_.int_pin);
+    ESP_LOGI(tag_.c_str(), "Setting up interrupt on GPIO %d", config_.int_pin);
 
     // Configure GPIO pin for interrupt
     gpio_config_t int_config = {};
@@ -40,28 +43,23 @@ esp_err_t TCA6408A::setupInterrupt()
     
     esp_err_t ret = gpio_config(&int_config);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure interrupt pin: %s", esp_err_to_name(ret));
+        ESP_LOGE(tag_.c_str(), "Failed to configure interrupt pin: %s", esp_err_to_name(ret));
         return ret;
     }
-
-    // Store this instance as the one that will handle interrupts
-    if (isrInstance_ != nullptr && isrInstance_ != this) {
-        ESP_LOGW(TAG, "Overriding existing ISR instance");
-    }
-    isrInstance_ = this;
 
     // Install the interrupt service
     ret = gpio_install_isr_service(0);
     if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
         // ESP_ERR_INVALID_STATE means ISR service is already installed, which is fine
-        ESP_LOGE(TAG, "Failed to install ISR service: %s", esp_err_to_name(ret));
+        ESP_LOGE(tag_.c_str(), "Failed to install ISR service: %s", esp_err_to_name(ret));
         return ret;
     }
 
     // Add our handler for this specific GPIO
-    ret = gpio_isr_handler_add(static_cast<gpio_num_t>(config_.int_pin), isrHandler, nullptr);
+    // Pass the instance pointer (this) as the argument to the ISR handler
+    ret = gpio_isr_handler_add(static_cast<gpio_num_t>(config_.int_pin), isrHandler, this);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to add ISR handler: %s", esp_err_to_name(ret));
+        ESP_LOGE(tag_.c_str(), "Failed to add ISR handler: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -76,7 +74,7 @@ esp_err_t TCA6408A::setupInterrupt()
         &interruptTaskHandle_);
 
     if (task_ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create interrupt task");
+        ESP_LOGE(tag_.c_str(), "Failed to create interrupt task");
         gpio_isr_handler_remove(static_cast<gpio_num_t>(config_.int_pin));
         interruptRunning_ = false;
         return ESP_FAIL;
@@ -84,13 +82,13 @@ esp_err_t TCA6408A::setupInterrupt()
 
     // Mark as enabled
     interruptEnabled_ = true;
-    ESP_LOGI(TAG, "Interrupt handler successfully set up");
+    ESP_LOGI(tag_.c_str(), "Interrupt handler successfully set up");
     
     // Read the input register once to clear any pending interrupt
     uint8_t dummy;
     ret = readRegister(REG_INPUT, &dummy);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to clear initial interrupt state: %s", esp_err_to_name(ret));
+        ESP_LOGW(tag_.c_str(), "Failed to clear initial interrupt state: %s", esp_err_to_name(ret));
     }
 
     return ESP_OK;
@@ -118,14 +116,14 @@ esp_err_t TCA6408A::cleanupInterrupt()
     }
 
     interruptEnabled_ = false;
-    ESP_LOGI(TAG, "Interrupt handler cleaned up");
+    ESP_LOGI(tag_.c_str(), "Interrupt handler cleaned up");
     return ESP_OK;
 }
 
 void TCA6408A::interruptTask(void* arg)
 {
     TCA6408A* self = static_cast<TCA6408A*>(arg);
-    ESP_LOGI(self->TAG, "Interrupt task started");
+    ESP_LOGI(self->tag_.c_str(), "Interrupt task started");
 
     while (self->interruptRunning_) {
         // Wait for notification from ISR - max 500ms timeout to allow clean exit
@@ -133,13 +131,13 @@ void TCA6408A::interruptTask(void* arg)
         
         if (notification > 0) {
             // We got a notification from the ISR
-            ESP_LOGD(self->TAG, "Received interrupt notification");
+            ESP_LOGD(self->tag_.c_str(), "Received interrupt notification");
             
             // Process the pin changes - this will read the input register and clear the INT pin
             self->processPinChanges();
         }
     }
 
-    ESP_LOGI(self->TAG, "Interrupt task exiting");
+    ESP_LOGI(self->tag_.c_str(), "Interrupt task exiting");
     vTaskDelete(NULL);
 }

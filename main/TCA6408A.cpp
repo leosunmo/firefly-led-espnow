@@ -2,29 +2,36 @@
 #include "esp_log.h"
 #include "freertos/task.h"
 #include <algorithm>
+#include <string>  // For std::to_string
 #include <vector>  // For std::vector in callback handling
-
-// Initialize static instance pointer for ISR
-TCA6408A* TCA6408A::isrInstance_ = nullptr;
 
 TCA6408A::TCA6408A(const Config &config) : config_(config)
 {
-    ESP_LOGI(TAG, "Creating TCA6408A instance with I2C address 0x%02x", config.i2c_address);
+    // Set the tag with the instance name for better debugging
+    if (config.name.empty()) {
+        // Use default name with address if no name provided
+        tag_ = "TCA6408A_" + std::to_string(config.i2c_address);
+    } else {
+        tag_ = "TCA6408A_" + config.name;
+    }
+    
+    esp_log_level_set(tag_.c_str(), TCA6408A_LOG_LEVEL); // Set default log level for this module
+    ESP_LOGI(tag_.c_str(), "Creating TCA6408A instance with I2C address 0x%02x", config.i2c_address);
     i2c_device_ = nullptr;
     
     // Create the event queue (holds up to 32 pin events)
     eventQueue_ = xQueueCreate(32, sizeof(PinEvent));
     if (eventQueue_ == nullptr) {
-        ESP_LOGE(TAG, "Failed to create event queue");
+        ESP_LOGE(tag_.c_str(), "Failed to create event queue");
     } else {
-        ESP_LOGI(TAG, "Event queue created successfully");
+        ESP_LOGI(tag_.c_str(), "Event queue created successfully");
     }
     
     // Check if interrupt pin is configured
     if (config_.int_pin >= 0) {
-        ESP_LOGI(TAG, "Interrupt pin configured: GPIO %d", config_.int_pin);
+        ESP_LOGI(tag_.c_str(), "Interrupt pin configured: GPIO %d", config_.int_pin);
     } else {
-        ESP_LOGI(TAG, "No interrupt pin configured, using polling mode");
+        ESP_LOGI(tag_.c_str(), "No interrupt pin configured, using polling mode");
     }
 }
 
@@ -39,10 +46,16 @@ TCA6408A::~TCA6408A()
         i2c_device_ = nullptr;
     }
 
-    // Delete I2C bus if we created it
-    if (i2c_bus_ != nullptr)
+    // Delete I2C bus only if we created it and are supposed to manage it
+    if (i2c_bus_ != nullptr && config_.manage_bus)
     {
+        ESP_LOGI(tag_.c_str(), "Deleting I2C bus");
         i2c_del_master_bus(i2c_bus_);
+        i2c_bus_ = nullptr;
+    }
+    else if (i2c_bus_ != nullptr)
+    {
+        ESP_LOGD(tag_.c_str(), "Not deleting I2C bus as it's shared");
         i2c_bus_ = nullptr;
     }
     
@@ -56,30 +69,40 @@ TCA6408A::~TCA6408A()
 
 esp_err_t TCA6408A::init()
 {
-    esp_log_level_set(TAG, ESP_LOG_DEBUG);
+    esp_log_level_set(tag_.c_str(), ESP_LOG_DEBUG);
 
-    ESP_LOGI(TAG, "Initializing TCA6408A on SDA:%d, SCL:%d",
+    ESP_LOGI(tag_.c_str(), "Initializing TCA6408A on SDA:%d, SCL:%d",
              config_.sda_pin, config_.scl_pin);
 
-    // Configure I2C bus
-    i2c_master_bus_config_t bus_config = {
-        // .i2c_port = I2C_NUM_0,
-        .i2c_port = -1, // Automatically select the first available I2C port
-        .sda_io_num = static_cast<gpio_num_t>(config_.sda_pin),
-        .scl_io_num = static_cast<gpio_num_t>(config_.scl_pin),
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-    };
+    // Check if we need to create our own I2C bus or use a shared one
+    if (config_.i2c_bus == nullptr) {
+        // Create our own I2C bus
+        ESP_LOGI(tag_.c_str(), "Creating new I2C bus");
+        
+        // Configure I2C bus
+        i2c_master_bus_config_t bus_config = {
+            // .i2c_port = I2C_NUM_0,
+            .i2c_port = -1, // Automatically select the first available I2C port
+            .sda_io_num = static_cast<gpio_num_t>(config_.sda_pin),
+            .scl_io_num = static_cast<gpio_num_t>(config_.scl_pin),
+            .clk_source = I2C_CLK_SRC_DEFAULT,
+            .glitch_ignore_cnt = 7,
+        };
 
-    // Set internal pullup flag separately
-    // Don't use internal pullups, the chip has them built-in
-    bus_config.flags.enable_internal_pullup = false;
+        // Set internal pullup flag separately
+        // Don't use internal pullups, the chip has them built-in
+        bus_config.flags.enable_internal_pullup = false;
 
-    esp_err_t ret = i2c_new_master_bus(&bus_config, &i2c_bus_);
-    if (ret != ESP_OK)
-    {
-        ESP_LOGE(TAG, "Failed to create I2C bus: %s", esp_err_to_name(ret));
-        return ret;
+        esp_err_t ret = i2c_new_master_bus(&bus_config, &i2c_bus_);
+        if (ret != ESP_OK)
+        {
+            ESP_LOGE(tag_.c_str(), "Failed to create I2C bus: %s", esp_err_to_name(ret));
+            return ret;
+        }
+    } else {
+        // Use the provided I2C bus
+        ESP_LOGI(tag_.c_str(), "Using provided I2C bus");
+        i2c_bus_ = config_.i2c_bus;
     }
 
     // Configure I2C device - TCA6408A works best at 100kHz (standard mode)
@@ -92,20 +115,20 @@ esp_err_t TCA6408A::init()
         .scl_speed_hz = config_.i2c_freq_hz,
     };
     
-    ESP_LOGI(TAG, "Configuring I2C device with address 0x%02x at %lu Hz", 
+    ESP_LOGI(tag_.c_str(), "Configuring I2C device with address 0x%02x at %lu Hz", 
              config_.i2c_address, config_.i2c_freq_hz);
 
-    ret = i2c_master_bus_add_device(i2c_bus_, &device_config, &i2c_device_);
+    esp_err_t ret = i2c_master_bus_add_device(i2c_bus_, &device_config, &i2c_device_);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Failed to add I2C device: %s", esp_err_to_name(ret));
+        ESP_LOGE(tag_.c_str(), "Failed to add I2C device: %s", esp_err_to_name(ret));
         i2c_del_master_bus(i2c_bus_);
         i2c_bus_ = nullptr;
         return ret;
     }
 
     // Add a retry mechanism to verify device presence
-    ESP_LOGI(TAG, "Checking if TCA6408A is present by reading input register...");
+    ESP_LOGI(tag_.c_str(), "Checking if TCA6408A is present by reading input register...");
 
     const int max_retries = 5;
     int retry_count = 0;
@@ -117,11 +140,11 @@ esp_err_t TCA6408A::init()
         if (ret == ESP_OK)
         {
             device_found = true;
-            ESP_LOGI(TAG, "TCA6408A device found after %d attempts", retry_count + 1);
+            ESP_LOGI(tag_.c_str(), "TCA6408A device found after %d attempts", retry_count + 1);
             break;
         }
 
-        ESP_LOGW(TAG, "Attempt %d: Failed to read from TCA6408A: %s",
+        ESP_LOGW(tag_.c_str(), "Attempt %d: Failed to read from TCA6408A: %s",
                  retry_count + 1, esp_err_to_name(ret));
         vTaskDelay(pdMS_TO_TICKS(100)); // Wait 100ms between retries
         retry_count++;
@@ -129,7 +152,7 @@ esp_err_t TCA6408A::init()
 
     if (!device_found)
     {
-        ESP_LOGE(TAG, "TCA6408A device not found after %d attempts", max_retries);
+        ESP_LOGE(tag_.c_str(), "TCA6408A device not found after %d attempts", max_retries);
         i2c_master_bus_rm_device(i2c_device_);
         i2c_device_ = nullptr;
         i2c_del_master_bus(i2c_bus_);
@@ -141,7 +164,7 @@ esp_err_t TCA6408A::init()
     ret = readRegister(REG_OUTPUT, &outputState_);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Failed to read output register: %s", esp_err_to_name(ret));
+        ESP_LOGE(tag_.c_str(), "Failed to read output register: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -149,14 +172,14 @@ esp_err_t TCA6408A::init()
     ret = readRegister(REG_CONFIG, &configState_);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Failed to read config register: %s", esp_err_to_name(ret));
+        ESP_LOGE(tag_.c_str(), "Failed to read config register: %s", esp_err_to_name(ret));
         return ret;
     }
 
-    ESP_LOGI(TAG, "TCA6408A initialized successfully");
-    ESP_LOGI(TAG, "  Input state:  0x%02x", inputState_);
-    ESP_LOGI(TAG, "  Output state: 0x%02x", outputState_);
-    ESP_LOGI(TAG, "  Config state: 0x%02x", configState_);
+    ESP_LOGI(tag_.c_str(), "TCA6408A initialized successfully");
+    ESP_LOGI(tag_.c_str(), "  Input state:  0x%02x", inputState_);
+    ESP_LOGI(tag_.c_str(), "  Output state: 0x%02x", outputState_);
+    ESP_LOGI(tag_.c_str(), "  Config state: 0x%02x", configState_);
 
     return ESP_OK;
 }
@@ -165,7 +188,7 @@ esp_err_t TCA6408A::configurePin(uint8_t pin, bool isOutput)
 {
     if (!isValidPin(pin))
     {
-        ESP_LOGE(TAG, "Invalid pin number: %d", pin);
+        ESP_LOGE(tag_.c_str(), "Invalid pin number: %d", pin);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -185,13 +208,13 @@ esp_err_t TCA6408A::configurePin(uint8_t pin, bool isOutput)
 
     if (newConfig != configState_)
     {
-        ESP_LOGD(TAG, "Configuring pin %d as %s", pin, isOutput ? "output" : "input");
-        ESP_LOGD(TAG, "New config: 0x%02x", newConfig);
+        ESP_LOGD(tag_.c_str(), "Configuring pin %d as %s", pin, isOutput ? "output" : "input");
+        ESP_LOGD(tag_.c_str(), "New config: 0x%02x", newConfig);
 
         esp_err_t ret = writeRegister(REG_CONFIG, newConfig);
         if (ret != ESP_OK)
         {
-            ESP_LOGE(TAG, "Failed to write config register: %s", esp_err_to_name(ret));
+            ESP_LOGE(tag_.c_str(), "Failed to write config register: %s", esp_err_to_name(ret));
             return ret;
         }
 
@@ -205,7 +228,7 @@ esp_err_t TCA6408A::readPin(uint8_t pin, uint8_t *level)
 {
     if (!isValidPin(pin) || level == nullptr)
     {
-        ESP_LOGE(TAG, "Invalid arguments");
+        ESP_LOGE(tag_.c_str(), "Invalid arguments");
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -223,7 +246,7 @@ esp_err_t TCA6408A::readPin(uint8_t pin, uint8_t *level)
         ret = readRegister(REG_INPUT, &state);
         if (ret != ESP_OK)
         {
-            ESP_LOGE(TAG, "Failed to read input register: %s", esp_err_to_name(ret));
+            ESP_LOGE(tag_.c_str(), "Failed to read input register: %s", esp_err_to_name(ret));
             return ret;
         }
         inputState_ = state;
@@ -242,7 +265,7 @@ esp_err_t TCA6408A::writePin(uint8_t pin, uint8_t level)
 {
     if (!isValidPin(pin))
     {
-        ESP_LOGE(TAG, "Invalid pin number: %d", pin);
+        ESP_LOGE(tag_.c_str(), "Invalid pin number: %d", pin);
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -251,7 +274,7 @@ esp_err_t TCA6408A::writePin(uint8_t pin, uint8_t level)
     // Check if the pin is configured as output
     if ((configState_ & (1 << pin)) != 0)
     {
-        ESP_LOGE(TAG, "Cannot write to input pin %d", pin);
+        ESP_LOGE(tag_.c_str(), "Cannot write to input pin %d", pin);
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -268,12 +291,12 @@ esp_err_t TCA6408A::writePin(uint8_t pin, uint8_t level)
 
     if (newOutput != outputState_)
     {
-        ESP_LOGD(TAG, "Setting pin %d to %d", pin, level);
+        ESP_LOGD(tag_.c_str(), "Setting pin %d to %d", pin, level);
 
         esp_err_t ret = writeRegister(REG_OUTPUT, newOutput);
         if (ret != ESP_OK)
         {
-            ESP_LOGE(TAG, "Failed to write output register: %s", esp_err_to_name(ret));
+            ESP_LOGE(tag_.c_str(), "Failed to write output register: %s", esp_err_to_name(ret));
             return ret;
         }
 
@@ -287,7 +310,7 @@ esp_err_t TCA6408A::registerCallback(uint8_t pin, PinChangeCallback callback, bo
 {
     if (!isValidPin(pin) || !callback)
     {
-        ESP_LOGE(TAG, "Invalid arguments");
+        ESP_LOGE(tag_.c_str(), "Invalid arguments");
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -299,13 +322,13 @@ esp_err_t TCA6408A::registerCallback(uint8_t pin, PinChangeCallback callback, bo
     // Ensure the pin is configured as input
     if ((configState_ & (1 << pin)) == 0)
     {
-        ESP_LOGW(TAG, "Pin %d is not configured as input, changing configuration", pin);
+        ESP_LOGW(tag_.c_str(), "Pin %d is not configured as input, changing configuration", pin);
 
         uint8_t newConfig = configState_ | (1 << pin);
         esp_err_t ret = writeRegister(REG_CONFIG, newConfig);
         if (ret != ESP_OK)
         {
-            ESP_LOGE(TAG, "Failed to write config register: %s", esp_err_to_name(ret));
+            ESP_LOGE(tag_.c_str(), "Failed to write config register: %s", esp_err_to_name(ret));
             return ret;
         }
 
@@ -322,14 +345,14 @@ esp_err_t TCA6408A::startMonitoring()
     // Check if the queue was successfully created
     if (eventQueue_ == nullptr)
     {
-        ESP_LOGE(TAG, "Event queue not initialized, cannot start monitoring");
+        ESP_LOGE(tag_.c_str(), "Event queue not initialized, cannot start monitoring");
         return ESP_ERR_INVALID_STATE;
     }
 
     // Make sure we're not already running
     if (pollTaskHandle_ != nullptr || callbackTaskHandle_ != nullptr || interruptTaskHandle_ != nullptr)
     {
-        ESP_LOGW(TAG, "Monitoring is already running");
+        ESP_LOGW(tag_.c_str(), "Monitoring is already running");
         return ESP_OK;
     }
 
@@ -345,7 +368,7 @@ esp_err_t TCA6408A::startMonitoring()
 
     if (cb_ret != pdPASS)
     {
-        ESP_LOGE(TAG, "Failed to create callback task");
+        ESP_LOGE(tag_.c_str(), "Failed to create callback task");
         callbackRunning_ = false;
         return ESP_FAIL;
     }
@@ -355,12 +378,12 @@ esp_err_t TCA6408A::startMonitoring()
         // Setup interrupt-based monitoring
         esp_err_t ret = setupInterrupt();
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to setup interrupt monitoring, falling back to polling");
+            ESP_LOGE(tag_.c_str(), "Failed to setup interrupt monitoring, falling back to polling");
             
             // Fall back to polling mode if interrupt setup fails
             config_.int_pin = -1;
         } else {
-            ESP_LOGI(TAG, "Started interrupt-based monitoring on GPIO %d", config_.int_pin);
+            ESP_LOGI(tag_.c_str(), "Started interrupt-based monitoring on GPIO %d", config_.int_pin);
             return ESP_OK;
         }
     }
@@ -378,7 +401,7 @@ esp_err_t TCA6408A::startMonitoring()
 
     if (poll_ret != pdPASS)
     {
-        ESP_LOGE(TAG, "Failed to create polling task");
+        ESP_LOGE(tag_.c_str(), "Failed to create polling task");
         pollRunning_ = false;
         
         // Clean up the callback task since poll task creation failed
@@ -393,7 +416,7 @@ esp_err_t TCA6408A::startMonitoring()
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Started polling-based monitoring with period %lu ms", config_.poll_period_ms);
+    ESP_LOGI(tag_.c_str(), "Started polling-based monitoring with period %lu ms", config_.poll_period_ms);
     return ESP_OK;
 }
 
@@ -443,7 +466,7 @@ esp_err_t TCA6408A::stopMonitoring()
         interruptTaskHandle_ = nullptr;
     }
 
-    ESP_LOGI(TAG, "Stopped monitoring TCA6408A inputs");
+    ESP_LOGI(tag_.c_str(), "Stopped monitoring TCA6408A inputs");
     return ESP_OK;
 }
 
@@ -496,7 +519,7 @@ esp_err_t TCA6408A::readRegister(uint8_t reg, uint8_t *data)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGW(TAG, "Failed to read register 0x%02x: %s", 
+        ESP_LOGW(tag_.c_str(), "Failed to read register 0x%02x: %s", 
                  reg, esp_err_to_name(ret));
     }
 
@@ -526,7 +549,7 @@ esp_err_t TCA6408A::writeRegister(uint8_t reg, uint8_t data)
 
     if (ret != ESP_OK)
     {
-        ESP_LOGW(TAG, "Failed to write register 0x%02x: %s", reg, esp_err_to_name(ret));
+        ESP_LOGW(tag_.c_str(), "Failed to write register 0x%02x: %s", reg, esp_err_to_name(ret));
     }
 
     return ret;
@@ -535,7 +558,9 @@ esp_err_t TCA6408A::writeRegister(uint8_t reg, uint8_t data)
 void TCA6408A::pollTask(void *arg)
 {
     TCA6408A *self = static_cast<TCA6408A *>(arg);
-    ESP_LOGI(self->TAG, "Polling task started");
+    // Use the actual string tag instead of trying to access the member variable
+    const char* tag = self->tag_.c_str();
+    ESP_LOGI(tag, "Polling task started");
 
     while (self->pollRunning_)
     {
@@ -544,14 +569,14 @@ void TCA6408A::pollTask(void *arg)
             esp_err_t result = self->processPinChanges();
             
             if (result != ESP_OK) {
-                ESP_LOGW(self->TAG, "Poll failed, will retry on next cycle");
+                ESP_LOGW(tag, "Poll failed, will retry on next cycle");
             }
         }
 
         vTaskDelay(pdMS_TO_TICKS(self->config_.poll_period_ms));
     }
 
-    ESP_LOGI(self->TAG, "Polling task exiting");
+    ESP_LOGI(tag, "Polling task exiting");
 
     // Clear task handle when exiting
     {
@@ -565,7 +590,9 @@ void TCA6408A::pollTask(void *arg)
 void TCA6408A::callbackTask(void *arg)
 {
     TCA6408A *self = static_cast<TCA6408A *>(arg);
-    ESP_LOGI(self->TAG, "Callback task started");
+    // Store the tag string once at the beginning
+    const char* tag = self->tag_.c_str();
+    ESP_LOGI(tag, "Callback task started");
     
     PinEvent event;
     
@@ -587,13 +614,13 @@ void TCA6408A::callbackTask(void *arg)
             // Call the callback outside the mutex lock
             if (callback)
             {
-                ESP_LOGD(self->TAG, "Executing callback for pin %d, level %d", event.pin, event.level);
+                ESP_LOGD(tag, "Executing callback for pin %d, level %d", event.pin, event.level);
                 callback(event.pin, event.level);
             }
         }
     }
     
-    ESP_LOGI(self->TAG, "Callback task exiting");
+    ESP_LOGI(tag, "Callback task exiting");
     
     // Clear task handle when exiting
     {
@@ -602,4 +629,31 @@ void TCA6408A::callbackTask(void *arg)
     }
     
     vTaskDelete(NULL);
+}
+
+esp_err_t TCA6408A::isPinInput(uint8_t pin, bool* isInput) {
+    if (!isValidPin(pin)) {
+        ESP_LOGE(tag_.c_str(), "Invalid pin number: %d", pin);
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    if (isInput == nullptr) {
+        ESP_LOGE(tag_.c_str(), "isInput pointer is null");
+        return ESP_ERR_INVALID_ARG;
+    }
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    uint8_t configVal;
+    esp_err_t ret = readRegister(REG_CONFIG, &configVal);
+    if (ret != ESP_OK) {
+        ESP_LOGE(tag_.c_str(), "Failed to read config register: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    
+    // In TCA6408A: 1 = input, 0 = output in the config register
+    *isInput = (configVal & (1 << pin)) != 0;
+    
+    ESP_LOGD(tag_.c_str(), "Pin %d is configured as %s", pin, *isInput ? "input" : "output");
+    return ESP_OK;
 }

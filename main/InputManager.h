@@ -11,6 +11,7 @@
 #include "Encoder.h"
 #include "ADS1015.h"
 #include "LEDManager.h"
+#include "Messages.h"
 
 // Device type identifiers
 enum class InputDeviceType {
@@ -23,9 +24,18 @@ enum class InputDeviceType {
 enum class ButtonId {
     BLUE_BUTTON,
     RED_BUTTON,
+    GREEN_BUTTON,
+    WHITE_BUTTON,
     HUE_A_ENCODER_BUTTON,
     HUE_B_ENCODER_BUTTON,
     // Add new buttons here
+};
+
+// Map a pattern to its corresponding button
+struct PatternState {
+    ButtonId buttonId;
+    PatternType patternType;
+    bool enableEncoders;
 };
 
 // Potentiometer ID enum for type-safe potentiometer identification
@@ -63,6 +73,41 @@ public:
      * Shutdown and cleanup
      */
     void shutdown();
+    
+    //=== Pattern State Management ===//
+    
+    /**
+     * @brief Set the active pattern state (and associated button)
+     * @param buttonId The button that was pressed
+     * @param patternType The pattern type to activate
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t setActivePattern(ButtonId buttonId, PatternType patternType);
+    
+    /**
+     * @brief Get the currently active pattern
+     * @return PatternType The active pattern
+     */
+    PatternType getActivePattern() const;
+    
+    /**
+     * @brief Get the button ID associated with the active pattern
+     * @return ButtonId The active button ID
+     */
+    ButtonId getActiveButton() const;
+    
+    /**
+     * @brief Check if encoders should be enabled for the current pattern
+     * @return bool True if encoders are enabled
+     */
+    bool areEncodersEnabled() const;
+    
+    /**
+     * @brief Enable or disable the encoders (both LED and events)
+     * @param enable True to enable, false to disable
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t setEncodersEnabled(bool enable);
     
     //=== Button Management ===//
     
@@ -177,6 +222,59 @@ public:
     void resetEncoderPosition(EncoderId encoderId);
     
     /**
+     * @brief Get the I2C bus handle for other components to use
+     * @return I2C bus handle or nullptr if not initialized
+     */
+    i2c_master_bus_handle_t getI2CBus() const { return i2c_bus_; }
+    
+    /**
+     * @brief Button LED control methods
+     */
+    
+    /**
+     * @brief Set the state of a button's LED
+     * @param buttonId The button identifier
+     * @param state true to turn on, false to turn off
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t setButtonLED(ButtonId buttonId, bool state);
+    
+    /**
+     * @brief Configure a pin on the TCA6408A_B as a button LED output
+     * @param buttonId The button identifier
+     * @param pin The TCA6408A_B pin number (0-7)
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t setButtonLEDPin(ButtonId buttonId, uint8_t pin);
+    
+    /**
+     * @brief Configure all button LED pins as outputs
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t configureButtonLEDPins();
+    
+    /**
+     * @brief Turn off all button LEDs
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t clearAllButtonLEDs();
+    
+    /**
+     * @brief Run a startup diagnostic/demo sequence on button LEDs
+     * @param duration_ms Duration for each LED to be lit in milliseconds
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t runButtonLEDDiagnostic(uint32_t duration_ms = 500);
+
+    /**
+     * @brief Run a startup diagnostic/demo sequence on encoder RGB LEDs
+     * @param duration_ms Total duration for the hue cycling animation in milliseconds
+     * @param steps Number of hue steps to cycle through
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t runEncoderLEDHueDiagnostic(uint32_t duration_ms = 1500, uint16_t steps = 60);
+    
+    /**
      * @brief Helper for converting enum values to strings (for logging)
      */
     static const char* buttonIdToString(ButtonId id);
@@ -199,6 +297,15 @@ private:
                       
     // General encoder event handler
     void handleEncoderEvent(EncoderId encoderId, Encoder::Event event, int32_t position);
+    
+    // Init helper functions
+    esp_err_t initLEDManager();
+    esp_err_t initI2C(); // New function to initialize and configure the I2C bus
+    esp_err_t initI2CExpanders();
+    esp_err_t initADC(i2c_master_bus_handle_t i2c_bus);
+    esp_err_t initButtons();
+    esp_err_t initPotentiometers();
+    esp_err_t initEncoders();
     
     // Button related storage
     struct ButtonInfo {
@@ -253,13 +360,27 @@ private:
     };
     
     // I2C devices
-    std::shared_ptr<TCA6408A> i2cExpander_;  // TCA6408A I2C GPIO expander for buttons
+    std::shared_ptr<TCA6408A> i2cExpanderA_;  // TCA6408A_A I2C GPIO expander for regular buttons (with pullups)
+    std::shared_ptr<TCA6408A> i2cExpanderB_;  // TCA6408A_B I2C GPIO expander for encoder buttons and button LEDs
     std::shared_ptr<ADS1015> adsAdc_;        // ADS1015 I2C ADC for potentiometers
+    i2c_master_bus_handle_t i2c_bus_ = nullptr; // Centralized I2C bus handle
     
     // Storage for buttons, potentiometers and encoders
     std::map<ButtonId, ButtonInfo> buttons;
     std::map<PotentiometerId, PotInfo> potentiometers;
     std::map<EncoderId, EncoderInfo> encoders;
+    
+    // Map of ButtonId to LED pin number on TCA6408A_B 
+    std::map<ButtonId, uint8_t> buttonLedPins;
+    
+    // Pattern state tracking
+    ButtonId activeButtonId_ = ButtonId::RED_BUTTON; // Default to RED button
+    PatternType activePattern_ = PatternType::CHROMA_WAVE; // Default to CHROMA_WAVE
+    bool encodersEnabled_ = true; // Default to enabled
+    
+    // Encoder LED color state tracking for persistence
+    uint16_t lastEncoderAHue_ = 60;  // Default to yellow (60°)
+    uint16_t lastEncoderBHue_ = 180; // Default to cyan (180°)
     
     // Log tag for ESP logging
     static constexpr const char* TAG = "InputManager";

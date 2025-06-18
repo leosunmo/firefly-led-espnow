@@ -7,15 +7,23 @@
 #include "freertos/portmacro.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "config.h"
 #include <functional>
 #include <map>
 #include <mutex>
+#include <string>
 
 /**
  * @brief TCA6408A I2C GPIO Expander driver
  */
 class TCA6408A {
 public:
+    // Register definitions (made public for use by other classes)
+    static constexpr uint8_t REG_INPUT      = 0x00;
+    static constexpr uint8_t REG_OUTPUT     = 0x01;
+    static constexpr uint8_t REG_POLARITY   = 0x02;
+    static constexpr uint8_t REG_CONFIG     = 0x03;
+    
     /**
      * @brief Pin change callback type
      * @param pin Pin number (0-7)
@@ -27,6 +35,7 @@ public:
      * @brief Configuration for TCA6408A
      */
     struct Config {
+        std::string name;          ///< Descriptive name for this TCA6408A instance (used in log tag)
         uint8_t i2c_address;       ///< I2C device address (default 0x20)
         int sda_pin;               ///< I2C SDA pin
         int scl_pin;               ///< I2C SCL pin
@@ -34,6 +43,8 @@ public:
         uint32_t timeout_ms;       ///< I2C timeout in milliseconds
         uint32_t poll_period_ms;   ///< Poll period for pin change detection (only used if int_pin is -1)
         int int_pin;               ///< GPIO pin connected to TCA6408A INT pin (set to -1 to use polling instead)
+        i2c_master_bus_handle_t i2c_bus = nullptr; ///< Optional: Existing I2C bus handle to share
+        bool manage_bus = true;    ///< Whether to create/delete the I2C bus (false if sharing)
     };
 
     /**
@@ -124,12 +135,32 @@ public:
      */
     i2c_master_bus_handle_t getI2CBus() const { return i2c_bus_; }
 
+    /**
+     * @brief Check if a pin is configured as input
+     * @param pin Pin number (0-7)
+     * @param isInput Pointer to store result (true if input, false if output)
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t isPinInput(uint8_t pin, bool* isInput);
+    
+    /**
+     * @brief Read a register from the TCA6408A
+     * @param reg Register to read
+     * @param data Pointer to store the data
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t readRegister(uint8_t reg, uint8_t* data);
+    
+    /**
+     * @brief Write to a register on the TCA6408A
+     * @param reg Register to write
+     * @param data Data to write
+     * @return ESP_OK on success, error code otherwise
+     */
+    esp_err_t writeRegister(uint8_t reg, uint8_t data);
+
 private:
-    // TCA6408A registers
-    static constexpr uint8_t REG_INPUT      = 0x00;
-    static constexpr uint8_t REG_OUTPUT     = 0x01;
-    static constexpr uint8_t REG_POLARITY   = 0x02;
-    static constexpr uint8_t REG_CONFIG     = 0x03;
+    // TCA6408A registers are now defined in the public section
 
     // Configuration
     Config config_;
@@ -171,9 +202,7 @@ private:
     bool interruptEnabled_ = false;
     bool interruptRunning_ = false;
 
-    // I2C register read/write methods
-    esp_err_t readRegister(uint8_t reg, uint8_t* data);
-    esp_err_t writeRegister(uint8_t reg, uint8_t data);
+    // I2C register read/write methods are now public
 
     // Task functions
     static void pollTask(void* arg);
@@ -187,14 +216,12 @@ private:
     esp_err_t cleanupInterrupt();
     
     // Static ISR handler (needs to be static to be registered with ESP-IDF)
+    // But takes the instance as arg parameter
     static void IRAM_ATTR isrHandler(void* arg);
     
-    // Store static instance pointer for ISR
-    static TCA6408A* isrInstance_;
-
     // Helper methods
     bool isValidPin(uint8_t pin) const { return pin < 8; }
 
-    // Logger tag
-    static constexpr const char* TAG = "TCA6408A";
+    // Logger tag - dynamically set based on instance name
+    std::string tag_;
 };

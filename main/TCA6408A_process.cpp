@@ -5,11 +5,14 @@ esp_err_t TCA6408A::processPinChanges()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     
+    // Get the tag for logging
+    const char* tag = tag_.c_str();
+    
     // Read the input register - this will clear the INT signal
     uint8_t newInputState;
     esp_err_t ret = readRegister(REG_INPUT, &newInputState);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to read input register: %s", esp_err_to_name(ret));
+        ESP_LOGW(tag, "Failed to read input register: %s", esp_err_to_name(ret));
         return ret;
     }
 
@@ -17,7 +20,7 @@ esp_err_t TCA6408A::processPinChanges()
     uint8_t changedBits = newInputState ^ inputState_;
     
     if (changedBits != 0) {
-        ESP_LOGD(TAG, "Input state changed: 0x%02x -> 0x%02x (changed: 0x%02x)",
+        ESP_LOGD(tag, "Input state changed: 0x%02x -> 0x%02x (changed: 0x%02x)",
                 inputState_, newInputState, changedBits);
                 
         // Update input state first
@@ -43,9 +46,9 @@ esp_err_t TCA6408A::processPinChanges()
                     // Use non-blocking send with short timeout - don't wait too long
                     BaseType_t result = xQueueSend(eventQueue_, &event, pdMS_TO_TICKS(10));
                     if (result != pdTRUE) {
-                        ESP_LOGE(TAG, "Failed to enqueue pin event for pin %d, queue might be full", pin);
+                        ESP_LOGE(tag, "Failed to enqueue pin event for pin %d, queue might be full", pin);
                     } else {
-                        ESP_LOGD(TAG, "Enqueued event for pin %d, level %d", pin, level);
+                        ESP_LOGD(tag, "Enqueued event for pin %d, level %d", pin, level);
                     }
                 }
             }

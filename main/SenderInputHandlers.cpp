@@ -18,15 +18,40 @@ void Sender::setupInputHandlers() {
     // Register button handlers
     // ====================
 
-    // Register handler for blue button press - sends blue pattern
+    // Register handler for blue button press
     inputManager.registerButtonHandler(ButtonId::BLUE_BUTTON, Button::Event::PRESSED, [this]() {
-        ESP_LOGI(TAG, "Blue button action: Sending Ball pattern command");
-        sendPatternChange(PatternType::BallPattern);
+        ESP_LOGI(TAG, "Blue button action: Sending SHAKEEL_FLASH pattern command");
+        PatternType pattern = PatternType::SHAKEEL_FLASH;
+        sendPatternChange(pattern);
+        // Update the UI state to reflect new pattern
+        InputManager::getInstance().setActivePattern(ButtonId::BLUE_BUTTON, pattern);
     });
 
+    // Register handler for red button press
     inputManager.registerButtonHandler(ButtonId::RED_BUTTON, Button::Event::PRESSED, [this]() {
-        ESP_LOGI(TAG, "Red button action: Sending FullBar pattern command");
-        sendPatternChange(PatternType::FullBarPattern);
+        ESP_LOGI(TAG, "Red button action: Sending CHROMA_WAVE pattern command");
+        PatternType pattern = PatternType::CHROMA_WAVE;
+        sendPatternChange(pattern);
+        // Update the UI state to reflect new pattern
+        InputManager::getInstance().setActivePattern(ButtonId::RED_BUTTON, pattern);
+    });
+
+    // Register handler for green button press
+    inputManager.registerButtonHandler(ButtonId::GREEN_BUTTON, Button::Event::PRESSED, [this]() {
+        ESP_LOGI(TAG, "Green button action: Sending SHAKEEL_FLASH_BALL pattern command");
+        PatternType pattern = PatternType::SHAKEEL_FLASH_BALL;
+        sendPatternChange(pattern);
+        // Update the UI state to reflect new pattern
+        InputManager::getInstance().setActivePattern(ButtonId::GREEN_BUTTON, pattern);
+    });
+
+    // Register handler for white button press
+    inputManager.registerButtonHandler(ButtonId::WHITE_BUTTON, Button::Event::PRESSED, [this]() {
+        ESP_LOGI(TAG, "White button action: Sending SHAKEEL_FLASH_BALL pattern command");
+        PatternType pattern = PatternType::SHAKEEL_FLASH_BALL;
+        sendPatternChange(pattern);
+        // Update the UI state to reflect new pattern
+        InputManager::getInstance().setActivePattern(ButtonId::WHITE_BUTTON, pattern);
     });
 
     // ====================
@@ -40,14 +65,13 @@ void Sender::setupInputHandlers() {
             sendBrightnessChange(static_cast<uint8_t>(percentage));
         });
 
-    // Speed potentiometer (uncomment when hardware is available)
-    /*
+    // Speed potentiometer
+
     inputManager.registerPotHandler(PotentiometerId::SPEED_POT, Potentiometer::Event::VALUE_CHANGED, 
         [this](uint32_t value, float percentage) {
             ESP_LOGI(TAG, "Speed changed to %.1f%%", percentage);
             sendSpeedChange(static_cast<uint8_t>(percentage));
         });
-    */
     
     // ====================
     // Encoder handlers
@@ -63,6 +87,12 @@ void Sender::setupInputHandlers() {
     // Clockwise rotation increases hue
     inputManager.registerEncoderHandler(EncoderId::HUE_A_ENCODER, Encoder::Event::CLOCKWISE, 
         [this](int32_t position) {
+            // Check if encoders are enabled for the current pattern
+            if (!InputManager::getInstance().areEncodersEnabled()) {
+                ESP_LOGD(TAG, "Ignoring HueA encoder event - encoders disabled for current pattern");
+                return;
+            }
+            
             // If the animation isn't running, start it as we have moved the encoder.
             if (!LEDManager::getInstance().isAnimationRunning(LEDManager::LEDId::ENCODER_A_RGB)) {
                 ESP_LOGI(TAG, "Starting animation for Hue A encoder");
@@ -89,6 +119,11 @@ void Sender::setupInputHandlers() {
     // Counter-clockwise rotation decreases hue
     inputManager.registerEncoderHandler(EncoderId::HUE_A_ENCODER, Encoder::Event::COUNTER_CLOCKWISE, 
         [this](int32_t position) {
+            // Check if encoders are enabled for the current pattern
+            if (!InputManager::getInstance().areEncodersEnabled()) {
+                ESP_LOGD(TAG, "Ignoring HueA encoder event - encoders disabled for current pattern");
+                return;
+            }
 
             // If the animation isn't running, start it as we have moved the encoder.
             if (!LEDManager::getInstance().isAnimationRunning(LEDManager::LEDId::ENCODER_A_RGB)) {
@@ -116,6 +151,12 @@ void Sender::setupInputHandlers() {
     // Register button handler for Hue A encoder
     inputManager.registerButtonHandler(ButtonId::HUE_A_ENCODER_BUTTON, Button::Event::PRESSED,
         [this]() {
+            // Check if encoders are enabled for the current pattern
+            if (!InputManager::getInstance().areEncodersEnabled()) {
+                ESP_LOGD(TAG, "Ignoring HueA encoder button - encoders disabled for current pattern");
+                return;
+            }
+            
             ESP_LOGD(TAG, "Pattern encoder button: Activating effect punch");
             // Get reference to LED Manager
             LEDManager& ledManager = LEDManager::getInstance();
@@ -130,8 +171,8 @@ void Sender::setupInputHandlers() {
                 ledManager.stopAnimation(ledId);
             }
 
-            // Send the new hue to receivers - use index 0 for primary hue
-            sendHueChange(0, encoderAHue);
+            // Send the new hue to receivers - use index 1 for primary hue
+            sendHueChange(1, encoderAHue);
         });
 
 
@@ -145,6 +186,12 @@ void Sender::setupInputHandlers() {
     // Clockwise rotation increases hue
     inputManager.registerEncoderHandler(EncoderId::HUE_B_ENCODER, Encoder::Event::CLOCKWISE, 
         [this](int32_t position) {
+            // Check if encoders are enabled for the current pattern
+            if (!InputManager::getInstance().areEncodersEnabled()) {
+                ESP_LOGD(TAG, "Ignoring HueB encoder event - encoders disabled for current pattern");
+                return;
+            }
+            
             // If the animation isn't running, start it as we have moved the encoder.
             if (!LEDManager::getInstance().isAnimationRunning(LEDManager::LEDId::ENCODER_B_RGB)) {
                 ESP_LOGI(TAG, "Starting animation for Hue B encoder");
@@ -171,7 +218,12 @@ void Sender::setupInputHandlers() {
     // Counter-clockwise rotation decreases hue
     inputManager.registerEncoderHandler(EncoderId::HUE_B_ENCODER, Encoder::Event::COUNTER_CLOCKWISE, 
         [this](int32_t position) {
-
+            // Check if encoders are enabled for the current pattern
+            if (!InputManager::getInstance().areEncodersEnabled()) {
+                ESP_LOGD(TAG, "Ignoring HueB encoder event - encoders disabled for current pattern");
+                return;
+            }
+            
             // If the animation isn't running, start it as we have moved the encoder.
             if (!LEDManager::getInstance().isAnimationRunning(LEDManager::LEDId::ENCODER_B_RGB)) {
                 ESP_LOGI(TAG, "Starting animation for Hue B encoder");
@@ -198,6 +250,12 @@ void Sender::setupInputHandlers() {
     // Register button handler for Hue B encoder
     inputManager.registerButtonHandler(ButtonId::HUE_B_ENCODER_BUTTON, Button::Event::PRESSED,
         [this]() {
+            // Check if encoders are enabled for the current pattern
+            if (!InputManager::getInstance().areEncodersEnabled()) {
+                ESP_LOGD(TAG, "Ignoring HueB encoder button - encoders disabled for current pattern");
+                return;
+            }
+            
             ESP_LOGD(TAG, "Pattern encoder button: Activating effect punch");
             // Get reference to LED Manager
             LEDManager& ledManager = LEDManager::getInstance();
@@ -212,7 +270,7 @@ void Sender::setupInputHandlers() {
                 ledManager.stopAnimation(ledId);
             }
 
-            // Send the new hue to receivers - use index 1 for secondary hue
-            sendHueChange(1, encoderBHue);
+            // Send the new hue to receivers - use index 0 for secondary hue
+            sendHueChange(0, encoderBHue);
         });
 }

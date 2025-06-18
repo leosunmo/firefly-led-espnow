@@ -16,12 +16,25 @@ esp_err_t Button::init() {
         return ESP_ERR_INVALID_STATE;
     }
 
-    // Configure pin as input
-    esp_err_t ret = config_.i2c_expander->configurePin(config_.pin, false);
+    // Check if pin is already configured as input
+    bool isInput = false;
+    esp_err_t ret = config_.i2c_expander->isPinInput(config_.pin, &isInput);
     if (ret != ESP_OK) {
-        ESP_LOGE(tag_, "Failed to configure pin %d as input: %s", 
-                config_.pin, esp_err_to_name(ret));
+        ESP_LOGE(tag_, "Failed to check pin configuration: %s", esp_err_to_name(ret));
         return ret;
+    }
+    
+    // Configure as input if it's not already
+    if (!isInput) {
+        ESP_LOGW(tag_, "Pin %d is not configured as input, configuring now", config_.pin);
+        ret = config_.i2c_expander->configurePin(config_.pin, false); // false = input
+        if (ret != ESP_OK) {
+            ESP_LOGE(tag_, "Failed to configure pin %d as input: %s", 
+                    config_.pin, esp_err_to_name(ret));
+            return ret;
+        }
+    } else {
+        ESP_LOGD(tag_, "Pin %d is already configured as input", config_.pin);
     }
 
     // Create debounce timer

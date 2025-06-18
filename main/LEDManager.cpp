@@ -79,14 +79,15 @@ esp_err_t LEDManager::init()
         return ESP_ERR_NO_MEM;
     }
     
-    // Start animation manager task
+    // Start animation manager task with increased stack size and higher priority
     animation_manager_running = true;
+    task_suspended = false;  // Ensure task starts in non-suspended state
     BaseType_t res = xTaskCreate(
         animationManagerTask,
         "LED_Anim_Mgr",
-        4096,                // Stack size
+        8192,                // Doubled stack size to prevent any potential stack overflow
         this,                // Task parameter (this pointer)
-        tskIDLE_PRIORITY+1,  // Low priority
+        tskIDLE_PRIORITY+2,  // Slightly higher priority for smoother animations
         &animation_manager_task
     );
     
@@ -97,7 +98,17 @@ esp_err_t LEDManager::init()
         return ESP_FAIL;
     }
     
-    ESP_LOGI(TAG, "Animation manager task created successfully");
+    // Verify the task was created successfully
+    if (animation_manager_task == nullptr) {
+        ESP_LOGE(TAG, "Animation manager task handle is NULL despite successful creation");
+        animation_manager_running = false;
+        vSemaphoreDelete(task_control_mutex);
+        task_control_mutex = nullptr;
+        return ESP_FAIL;
+    }
+    
+    ESP_LOGI(TAG, "Animation manager task created successfully with handle: %p", 
+             (void*)animation_manager_task);
 
     initialized = true;
     ESP_LOGI(TAG, "LEDManager initialized successfully");
@@ -450,22 +461,44 @@ esp_err_t LEDManager::startAnimation(LEDId ledId, const AnimationConfig& config)
     // Release the LED-specific mutex
     xSemaphoreGive(mutex_it->second);
     
-    // Resume task if this is the first animation
-    if (was_empty && xSemaphoreTake(task_control_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    // Resume task if this is the first animation or if task is suspended
+    bool is_task_suspended = false;
+    
+    if (xSemaphoreTake(task_control_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        is_task_suspended = task_suspended;
+        
         if (task_suspended && animation_manager_task != nullptr) {
-            ESP_LOGD(TAG, "Resuming animation manager task for new animation");
+            ESP_LOGI(TAG, "Resuming animation manager task for new animation on LED %s", ledIdToString(ledId));
             task_suspended = false;
             vTaskResume(animation_manager_task);
+        } else {
+            ESP_LOGI(TAG, "Animation manager task status - suspended: %s, handle: %p", 
+                     task_suspended ? "yes" : "no", 
+                     (void*)animation_manager_task);
         }
         xSemaphoreGive(task_control_mutex);
+    } else {
+        ESP_LOGW(TAG, "Failed to take task control mutex for checking task status");
     }
     
-    ESP_LOGI(TAG, "Started %s animation on LED %s (duration: %lu ms, repeats: %s, current hue: %u)",
+    // Print extra diagnostic info about current animation task
+    bool found_animations = false;
+    for (const auto& anim_pair : led_animations) {
+        if (!anim_pair.second.empty()) {
+            found_animations = true;
+            ESP_LOGI(TAG, "Found active animations for LED %s (count: %d)", 
+                     ledIdToString(anim_pair.first), anim_pair.second.size());
+        }
+    }
+    
+    ESP_LOGI(TAG, "Started %s animation on LED %s (duration: %lu ms, repeats: %s, current hue: %u, task suspended: %s, animations found: %s)",
              animationTypeToString(config.type), 
              ledIdToString(ledId),
              anim.config.duration_ms,
              config.repeat_count == 0 ? "infinite" : std::to_string(config.repeat_count).c_str(),
-             it->second.current_hsv.h);
+             it->second.current_hsv.h,
+             is_task_suspended ? "yes" : "no",
+             found_animations ? "yes" : "no");
     
     return ESP_OK;
 }
@@ -532,7 +565,30 @@ esp_err_t LEDManager::stopAnimation(LEDId ledId)
     it->second.animation_running = false;
     it->second.current_animation = AnimationType::NONE;
     
-    ESP_LOGI(TAG, "Stopped animation on LED %s", ledIdToString(ledId));
+    // Print diagnostics about animation task state
+    bool has_any_animations = false;
+    for (const auto& anim_pair : led_animations) {
+        if (!anim_pair.second.empty()) {
+            for (const auto& anim : anim_pair.second) {
+                if (anim.running) {
+                    has_any_animations = true;
+                    ESP_LOGI(TAG, "LED %s still has running animation (type: %s)", 
+                            ledIdToString(anim_pair.first), animationTypeToString(anim.type));
+                }
+            }
+        }
+    }
+    
+    bool is_task_suspended = false;
+    if (xSemaphoreTake(task_control_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        is_task_suspended = task_suspended;
+        xSemaphoreGive(task_control_mutex);
+    }
+    
+    ESP_LOGI(TAG, "Stopped animation on LED %s (other animations running: %s, task suspended: %s)", 
+             ledIdToString(ledId), 
+             has_any_animations ? "yes" : "no",
+             is_task_suspended ? "yes" : "no");
     
     return ESP_OK;
 }
@@ -542,7 +598,12 @@ void LEDManager::animationManagerTask(void* arg)
     LEDManager* manager = static_cast<LEDManager*>(arg);
     const uint32_t frame_time_ms = 20; // 50fps update rate - good balance between smoothness and performance
     
-    ESP_LOGI(manager->TAG, "Animation manager task started");
+    // Get task handle for diagnostics
+    TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
+    
+    ESP_LOGI(manager->TAG, "Animation manager task started - task handle: %p", (void*)current_task);
+    ESP_LOGI(manager->TAG, "Initial task state: suspended=%s", 
+             manager->task_suspended ? "true" : "false");
     
     // Use absolute timing to maintain consistent frame rate
     TickType_t last_wake_time = xTaskGetTickCount();
@@ -588,6 +649,22 @@ void LEDManager::updateAnimations()
 {
     // Get current time for this frame
     uint32_t current_time_ms = getCurrentTimeMs();
+    
+    // Don't suspend for the first 3 seconds after initialization to allow animations to be added
+    static bool initial_delay_complete = false;
+    static uint32_t start_time_ms = current_time_ms;
+    
+    if (!initial_delay_complete) {
+        if (current_time_ms - start_time_ms > 3000) {
+            initial_delay_complete = true;
+            ESP_LOGI(TAG, "Animation manager initial delay complete, normal operation begins");
+        } else {
+            // Keep running during initial delay period
+            ESP_LOGD(TAG, "Animation manager in initial delay period: %lu ms elapsed", 
+                     current_time_ms - start_time_ms);
+            return;
+        }
+    }
     
     // Check if any LED has active animations
     bool has_animations = false;
