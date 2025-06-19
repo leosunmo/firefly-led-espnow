@@ -57,6 +57,11 @@ private:
     // Static values for ESP-NOW
     static constexpr size_t ESPNOW_MAX_PEER_FAIL = 2; // Maximum failed sends before dropping a peer
 
+    // Store the previous pattern so we can go back after a Flash
+    PatternType previousPattern = PatternType::NONE;
+    // Store the previous active button so we can go back after a Flash
+    ButtonId previousActiveButton = ButtonId::RED_BUTTON;
+
     // Static methods for ESP-NOW
     static void sendLoop(void *pvParameter);
     static void sendCallback(const uint8_t *mac_addr, esp_now_send_status_t status);

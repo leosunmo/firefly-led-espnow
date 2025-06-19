@@ -47,11 +47,24 @@ void Sender::setupInputHandlers() {
 
     // Register handler for white button press
     inputManager.registerButtonHandler(ButtonId::WHITE_BUTTON, Button::Event::PRESSED, [this]() {
-        ESP_LOGI(TAG, "White button action: Sending SHAKEEL_FLASH_BALL pattern command");
-        PatternType pattern = PatternType::SHAKEEL_FLASH_BALL;
+        ESP_LOGI(TAG, "White button action: Sending FLASH pattern command");
+        // Store the previous pattern before changing to FLASH
+        previousPattern = InputManager::getInstance().getActivePattern();
+        previousActiveButton = InputManager::getInstance().getActiveButton();
+        PatternType pattern = PatternType::FLASH;
         sendPatternChange(pattern);
         // Update the UI state to reflect new pattern
         InputManager::getInstance().setActivePattern(ButtonId::WHITE_BUTTON, pattern);
+    });
+
+    inputManager.registerButtonHandler(ButtonId::WHITE_BUTTON, Button::Event::RELEASED, [this]() {
+        // If the previous pattern was set, restore it
+        if (previousPattern != PatternType::NONE) {
+            ESP_LOGI(TAG, "White button released: Restoring previous pattern %d", static_cast<int>(previousPattern));
+            sendPatternChange(previousPattern);
+            InputManager::getInstance().setActivePattern(previousActiveButton, previousPattern);
+            previousPattern = PatternType::NONE; // Reset after restoring
+        }
     });
 
     // ====================
