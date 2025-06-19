@@ -17,6 +17,7 @@ enum class PatternType : uint8_t {
     CHROMA_WAVE = 1,
     SHAKEEL_FLASH = 2,
     SHAKEEL_FLASH_BALL = 3,
+    FLASH = 4,
     // BOUNCE = 4,
     // BOUNCE_SPLIT = 5,
     // BOUNCE_HIGH_LOW = 6,
@@ -30,10 +31,11 @@ enum class PatternType : uint8_t {
 // Helper function to get pattern name from pattern type
 inline const char* getPatternName(PatternType type) {
     switch (type) {
-        case PatternType::NONE:             return "None";
-        case PatternType::CHROMA_WAVE:      return "Chroma Wave";
-        case PatternType::SHAKEEL_FLASH:    return "Shakeel Flash";
+        case PatternType::NONE:               return "None";
+        case PatternType::CHROMA_WAVE:        return "Chroma Wave";
+        case PatternType::SHAKEEL_FLASH:      return "Shakeel Flash";
         case PatternType::SHAKEEL_FLASH_BALL: return "Shakeel Flash Ball";
+        case PatternType::FLASH:              return "Flash";
         // case PatternType::BOUNCE:           return "Bounce";
         // case PatternType::BOUNCE_SPLIT:     return "Bounce Split";
         // case PatternType::BOUNCE_HIGH_LOW:  return "Bounce High Low";
